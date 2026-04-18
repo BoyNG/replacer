@@ -3,7 +3,7 @@
 **File content search and replace utility with encoding conversion**  
 **Утилита поиска и замены содержимого файлов с конвертацией кодировок**
 
-Version 26.0417 by BoyNG (Vyacheslav Burnosov)
+Version 26.0418 by BoyNG (Vyacheslav Burnosov)
 
 ---
 
@@ -90,6 +90,49 @@ replacer [encoding:]<input>[:[encoding][:output]] [operations...]
 | `dos` | DOS (CP866) |
 | `koi` | KOI8-R (CP20866) |
 | `utf` | UTF-8 (default / по умолчанию) |
+
+### Wildcards / Подстановочные символы
+
+| Symbol / Символ | Description / Описание |
+|-----------------|------------------------|
+| `\.` | Any single byte / Любой один байт |
+| `\*` | Zero or more bytes / Ноль или более байтов |
+| `\?` | Optional byte (zero or one) / Необязательный байт (ноль или один) |
+
+**Note / Примечание:** Use backslash to escape wildcards. Without backslash they are literal characters.  
+Используйте обратный слэш для wildcards. Без слэша - это литеральные символы.
+
+### Concatenation / Конкатенация
+
+| Operator / Оператор | Description / Описание |
+|---------------------|------------------------|
+| `+` | Join operator to combine hex and text parts / Оператор объединения для комбинирования hex и текста |
+
+**Examples / Примеры:**
+- `"text"+0x0A+"more"` - join text, hex byte, and text / объединить текст, hex байт и текст
+- `"<tag>"+\*+"</tag>"` - match anything between tags / найти что угодно между тегами
+- `0xAA+\.+0xBB` - match 0xAA, any byte, then 0xBB / найти 0xAA, любой байт, затем 0xBB
+- `"colo"+\?+"r"` - match color, colour, colo?r / найти color, colour, colo?r
+
+### Important: Quoting Rules / Важно: Правила кавычек
+
+**For Windows CMD / Для Windows CMD:**
+```cmd
+replacer file.txt "colo"+\?+"r":"result"
+replacer file.txt ?:X
+```
+Wildcards require backslash escape: `\?`, `\.`, `\*`. Without backslash they are literal characters.  
+Text with spaces must be in quotes: `"text with spaces"`.  
+Wildcards с обратным слэшем: `\?`, `\.`, `\*`. Без слэша - литеральные символы.  
+Текст с пробелами должен быть в кавычках: `"текст с пробелами"`.
+
+**For Git Bash (Unix shell on Windows) / Для Git Bash (Unix shell на Windows):**
+```bash
+replacer file.txt 'colo+\?+r:result'
+replacer file.txt '?:X'
+```
+Use single quotes to protect the entire argument from bash processing.  
+Используйте одинарные кавычки для защиты всего аргумента от обработки bash.
 
 ---
 
@@ -237,7 +280,45 @@ replacer win:file.txt:utf "тест":"test":win "hello":"привет":utf
 **English:** Mixed encoding operations: first operation uses Windows-1251, second uses UTF-8  
 **Русский:** Смешанные операции с кодировками: первая использует Windows-1251, вторая UTF-8
 
-### 9. Stdin/stdout mode / Режим stdin/stdout
+### 9. Wildcard patterns / Паттерны с wildcards
+
+```bash
+replacer test.html "<title>"+\*+"</title>":"<title>New Title</title>"
+```
+**English:** Match anything between `<title>` and `</title>` tags using `\*` wildcard  
+**Русский:** Найти что угодно между тегами `<title>` и `</title>` используя wildcard `\*`
+
+```bash
+replacer test.bin 0xAA+\.+0xBB:0xFF
+```
+**English:** Match 0xAA, any single byte (`\.`), then 0xBB, replace with 0xFF  
+**Русский:** Найти 0xAA, любой один байт (`\.`), затем 0xBB, заменить на 0xFF
+
+```bash
+replacer test.txt "colo"+\?+"r":"COLOR"
+```
+**English:** Match "color" or "colour" using optional byte wildcard `\?`  
+**Русский:** Найти "color" или "colour" используя wildcard необязательного байта `\?`
+
+```bash
+replacer test.txt ?:X
+```
+**English:** Replace literal `?` character with `X` (no backslash = literal)  
+**Русский:** Заменить литеральный символ `?` на `X` (без слэша = литеральный)
+
+```bash
+replacer test.txt "test"+0x0D0A:"replaced"+0x0A
+```
+**English:** Concatenate text and hex: match "test" + CRLF, replace with "replaced" + LF  
+**Русский:** Конкатенация текста и hex: найти "test" + CRLF, заменить на "replaced" + LF
+
+```bash
+replacer file.bin 0xFF+\*+0x00:0xAA
+```
+**English:** Match 0xFF followed by any bytes followed by 0x00, replace entire match with 0xAA  
+**Русский:** Найти 0xFF за которым следуют любые байты и затем 0x00, заменить всё совпадение на 0xAA
+
+### 10. Stdin/stdout mode / Режим stdin/stdout
 
 ```bash
 replacer - 0xAA:0xBB < input.bin > output.bin
@@ -281,7 +362,7 @@ replacer dos:-:utf < dos_file.txt > utf_file.txt
 **English:** Convert DOS (CP866) file to UTF-8 using stdin/stdout  
 **Русский:** Конвертировать DOS (CP866) файл в UTF-8 используя stdin/stdout
 
-### 10. Mixed operations / Смешанные операции
+### 11. Mixed operations / Смешанные операции
 
 ```bash
 replacer file.bin:result.bin 0xFF: "test":"demo" $AA:$BB
@@ -301,7 +382,7 @@ replacer file.txt:- 0x0D0A:0x0A
 **English:** Convert Windows line endings (CRLF) to Unix (LF) and output to stdout  
 **Русский:** Конвертировать Windows окончания строк (CRLF) в Unix (LF) и вывести в stdout
 
-### 11. Practical use cases / Практические примеры использования
+### 12. Practical use cases / Практические примеры использования
 
 ```bash
 replacer config.ini "localhost":"192.168.1.100"
@@ -383,4 +464,4 @@ Free to use and modify.
 
 **BoyNG (Vyacheslav Burnosov)**
 
-Version / Версия: 26.0417
+Version / Версия: 26.0418
