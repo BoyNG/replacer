@@ -7,6 +7,22 @@ Version 26.0418 by BoyNG (Vyacheslav Burnosov)
 
 ---
 
+## New in 26.0418 / Новое в версии 26.0418
+
+**English:**
+- **Wildcard support**: Pattern matching with `\.` (any byte), `\*` (zero or more bytes), `\?` (optional byte)
+- **Concatenation operator**: Join hex and text parts with `+` operator
+- **Escape sequences**: Use backslash to enable wildcards, without backslash they are literal characters
+- **Enhanced pattern matching**: Complex patterns like `"<tag>"+\*+"</tag>"` or `"colo"+\?+"r"`
+
+**Русский:**
+- **Поддержка wildcards**: Поиск по паттернам с `\.` (любой байт), `\*` (ноль или более байтов), `\?` (необязательный байт)
+- **Оператор конкатенации**: Объединение hex и текста оператором `+`
+- **Escape последовательности**: Используйте обратный слэш для wildcards, без слэша - литеральные символы
+- **Расширенный поиск**: Сложные паттерны типа `"<tag>"+\*+"</tag>"` или `"colo"+\?+"r"`
+
+---
+
 ## Description / Описание
 
 **English:**  
@@ -318,6 +334,48 @@ replacer file.bin 0xFF+\*+0x00:0xAA
 **English:** Match 0xFF followed by any bytes followed by 0x00, replace entire match with 0xAA  
 **Русский:** Найти 0xFF за которым следуют любые байты и затем 0x00, заменить всё совпадение на 0xAA
 
+```bash
+replacer log.txt "ERROR"+\*+0x0A:
+```
+**English:** Delete entire lines starting with "ERROR" (match ERROR + any chars + newline, replace with empty)  
+**Русский:** Удалить целые строки начинающиеся с "ERROR" (найти ERROR + любые символы + перевод строки, заменить на пустоту)
+
+```bash
+replacer data.txt "["+"\""+\*+"\""+"]":"[REDACTED]"
+```
+**English:** Match and replace JSON-like strings in brackets: `["anything"]` → `[REDACTED]`  
+**Русский:** Найти и заменить JSON-подобные строки в скобках: `["что угодно"]` → `[REDACTED]`
+
+```bash
+replacer config.ini "password"+\*+0x0D0A:"password=***"+0x0D0A
+```
+**English:** Redact passwords in INI files: match "password" + any chars + CRLF, replace with masked value  
+**Русский:** Скрыть пароли в INI файлах: найти "password" + любые символы + CRLF, заменить на замаскированное значение
+
+```bash
+replacer source.c "//"+\*+0x0A:0x0A
+```
+**English:** Remove C++ style comments: match "//" + any chars + newline, replace with just newline  
+**Русский:** Удалить C++ комментарии: найти "//" + любые символы + перевод строки, заменить на просто перевод строки
+
+```bash
+replacer file.txt "test"+\.+\.+\.+"end":"MATCH"
+```
+**English:** Match "test" followed by exactly 3 bytes, then "end"  
+**Русский:** Найти "test" за которым следуют ровно 3 байта, затем "end"
+
+```bash
+replacer data.bin 0xAA+\?+0xBB+\?+0xCC:0xFF
+```
+**English:** Match hex patterns with optional bytes: 0xAA [optional] 0xBB [optional] 0xCC  
+**Русский:** Найти hex паттерны с необязательными байтами: 0xAA [необязательный] 0xBB [необязательный] 0xCC
+
+```bash
+replacer html.txt "<"+\*+">":
+```
+**English:** Remove all HTML tags (match < + any chars + >, replace with empty)  
+**Русский:** Удалить все HTML теги (найти < + любые символы + >, заменить на пустоту)
+
 ### 10. Stdin/stdout mode / Режим stdin/stdout
 
 ```bash
@@ -413,6 +471,48 @@ replacer win:legacy.txt:utf "©":"(c)":win "®":"(R)":win
 ```
 **English:** Replace special characters in legacy Windows-1251 file, output as UTF-8  
 **Русский:** Заменить специальные символы в старом файле Windows-1251, вывод в UTF-8
+
+```bash
+replacer access.log "IP: "+\*+" -":"IP: [REDACTED] -"
+```
+**English:** Anonymize IP addresses in log files using wildcard pattern  
+**Русский:** Анонимизировать IP адреса в лог файлах используя wildcard паттерн
+
+```bash
+replacer source.cpp "TODO"+\*+0x0A:"DONE"+0x0A
+```
+**English:** Mark all TODO comments as DONE in source code  
+**Русский:** Пометить все TODO комментарии как DONE в исходном коде
+
+```bash
+replacer data.csv ","+\*+",":","
+```
+**English:** Remove content between commas in CSV (clean empty fields)  
+**Русский:** Удалить содержимое между запятыми в CSV (очистить пустые поля)
+
+```bash
+replacer email.txt "password"+\?+":"+\*+0x0A:"password: [HIDDEN]"+0x0A
+```
+**English:** Redact passwords from email dumps (handles "password:" and "passwords:")  
+**Русский:** Скрыть пароли из дампов email (обрабатывает "password:" и "passwords:")
+
+```bash
+replacer binary.dat 0xDEADBEEF+\.+\.+\.+\.:0xCAFEBABE+0x00000000
+```
+**English:** Patch binary signature: find 0xDEADBEEF + 4 bytes, replace with 0xCAFEBABE + 4 zeros  
+**Русский:** Пропатчить бинарную сигнатуру: найти 0xDEADBEEF + 4 байта, заменить на 0xCAFEBABE + 4 нуля
+
+```bash
+replacer script.bat "REM"+\*+0x0D0A:0x0D0A
+```
+**English:** Remove all REM comments from batch file (keep line breaks)  
+**Русский:** Удалить все REM комментарии из batch файла (сохранить переводы строк)
+
+```bash
+replacer json.txt "\"token\""+\?+":"+\?+"\""+\*+"\"":"\"token\": \"***\""
+```
+**English:** Redact JSON tokens with flexible spacing: `"token":"value"` or `"token" : "value"`  
+**Русский:** Скрыть JSON токены с гибкими пробелами: `"token":"value"` или `"token" : "value"`
 
 ---
 
