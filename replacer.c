@@ -1009,6 +1009,7 @@ int parse_concatenated_input_with_captures(const char* input,
         all_segments[total_segment_count] = group_segments[i];
         all_segments[total_segment_count].is_capture_group = 1;
         all_segments[total_segment_count].capture_group_index = group_count;
+        // Store group name in segment (for both named and numbered groups)
         if (is_named) {
           strcpy(all_segments[total_segment_count].group_name, group_name);
         } else {
@@ -1036,9 +1037,10 @@ int parse_concatenated_input_with_captures(const char* input,
     }
   }
 
-  // Phase 3: Build defined_groups
+  // Phase 3: Build defined_groups - add ALL named groups
   for (int i = 0; i < group_count; i++) {
     if (groups[i].is_named) {
+      // Named group: add to defined_groups
       strcpy(defined_groups[*defined_group_count].name, groups[i].name);
       defined_groups[*defined_group_count].index = groups[i].group_index;
       (*defined_group_count)++;
@@ -1609,6 +1611,7 @@ int build_replacement_with_captures(const char* template,
           strncpy(name, p + 1, name_len);
           name[name_len] = '\0';
 
+          int found = 0;
           for (int i = 0; i < captures->named_group_count; i++) {
             if (strcmp(captures->named_groups[i].name, name) == 0) {
               int idx = captures->named_groups[i].index;
@@ -1616,6 +1619,7 @@ int build_replacement_with_captures(const char* template,
                 memcpy(*result + out_pos, captures->captures[idx].data, captures->captures[idx].len);
                 out_pos += captures->captures[idx].len;
               }
+              found = 1;
               break;
             }
           }
@@ -2033,12 +2037,8 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
   // Check if replace string contains capture references (\0, \1, etc.)
   op->has_captures_in_replace = has_capture_references(replace_str);
   if (op->has_captures_in_replace) {
-    // Extract text from quotes if needed
-    if (is_quoted_string(replace_str)) {
-      op->replace_template = extract_quoted_string(replace_str);
-    } else {
-      op->replace_template = strdup(replace_str);
-    }
+    // Save template without processing quotes - they'll be handled in build_replacement_with_captures
+    op->replace_template = strdup(replace_str);
   } else {
     op->replace_template = NULL;
   }
@@ -2089,7 +2089,7 @@ int main(int argc, char* argv[]) {
 
   if (argc < 2 + arg_offset) {
     fprintf(stderr,
-            "\n" COLOR_YELLOW "REPLACER " COLOR_YELLOW "v26.0420 - " COLOR_CYAN
+            "\n" COLOR_YELLOW "REPLACER " COLOR_YELLOW "v26.0421 - " COLOR_CYAN
             "File content search and replace utility with encoding "
             "conversion" COLOR_RESET "\n");
     fprintf(stderr,
@@ -2098,7 +2098,7 @@ int main(int argc, char* argv[]) {
     fprintf(stderr, "(By BoyNG - \nVyacheslav Burnosov)\n\n\n");
     fprintf(stderr,
             COLOR_YELLOW "Usage / Использование:" COLOR_RESET " %s " COLOR_GREEN
-                         "[encoding:]<input>[:[encoding][:output]]" COLOR_RESET
+                         "[-d] [encoding:]<input>[:[encoding][:output]]" COLOR_RESET
                          " [operations...]\n\n",
             argv[0]);
 
@@ -2209,6 +2209,17 @@ int main(int argc, char* argv[]) {
                     " (KOI8-R), " COLOR_GREEN "utf" COLOR_RESET
                     " (UTF-8, default/по умолчанию)\n");
 
+    fprintf(stderr, "\n" COLOR_YELLOW "Debug mode / Режим отладки:" COLOR_RESET "\n");
+    fprintf(stderr, "  " COLOR_GREEN "-d" COLOR_RESET
+                    "                          - " COLOR_CYAN
+                    "show detailed debug information" COLOR_RESET "\n");
+    fprintf(stderr,
+            "                                показать подробную отладочную информацию\n");
+    fprintf(stderr, "  " COLOR_CYAN "Note:" COLOR_RESET
+                    " Must be first argument. Shows arguments, file spec, operations, sizes.\n");
+    fprintf(stderr, "  " COLOR_CYAN "Примечание:" COLOR_RESET
+                    " Должен быть первым аргументом. Показывает аргументы, файлы, операции, размеры.\n");
+
     fprintf(stderr, "\n" COLOR_YELLOW
                     "Wildcards / Подстановочные символы:" COLOR_RESET "\n");
     fprintf(stderr, "  " COLOR_GREEN "\\." COLOR_RESET
@@ -2250,6 +2261,33 @@ int main(int argc, char* argv[]) {
     fprintf(stderr,
             "                                найти color, colour, colo?r\n");
 
+    fprintf(stderr, "\n" COLOR_YELLOW "Capture groups / Группы захвата:" COLOR_RESET "\n");
+    fprintf(stderr, "  " COLOR_GREEN "{pattern}" COLOR_RESET
+                    "                   - " COLOR_CYAN
+                    "numbered capture group (max 9)" COLOR_RESET "\n");
+    fprintf(stderr,
+            "                                нумерованная группа захвата (максимум 9)\n");
+    fprintf(stderr, "  " COLOR_GREEN "{name=pattern}" COLOR_RESET
+                    "              - " COLOR_CYAN
+                    "named capture group (unlimited)" COLOR_RESET "\n");
+    fprintf(stderr,
+            "                                именованная группа захвата (неограниченно)\n");
+    fprintf(stderr, "  " COLOR_GREEN "\\0" COLOR_RESET
+                    "                          - " COLOR_CYAN
+                    "reference entire match in replacement" COLOR_RESET "\n");
+    fprintf(stderr,
+            "                                ссылка на всё вхождение в замене\n");
+    fprintf(stderr, "  " COLOR_GREEN "\\1" COLOR_RESET " to " COLOR_GREEN "\\9" COLOR_RESET
+                    "                     - " COLOR_CYAN
+                    "reference numbered groups in replacement" COLOR_RESET "\n");
+    fprintf(stderr,
+            "                                ссылка на нумерованные группы в замене\n");
+    fprintf(stderr, "  " COLOR_GREEN "{name}" COLOR_RESET
+                    "                      - " COLOR_CYAN
+                    "reference named group in replacement" COLOR_RESET "\n");
+    fprintf(stderr,
+            "                                ссылка на именованную группу в замене\n");
+
     fprintf(stderr, "\n" COLOR_YELLOW "Examples / Примеры:" COLOR_RESET "\n");
     fprintf(stderr, "  %s file.bin 0xAA:0xBB 0xCC:0xDD\n", argv[0]);
     fprintf(stderr, "  %s file.bin:out.bin 0xAA:0xBB \"old\":\"new\":win\n",
@@ -2273,6 +2311,16 @@ int main(int argc, char* argv[]) {
         argv[0]);
     fprintf(stderr, "  %s test.txt \"colo\"+\\?+\"r\":\"COLOR\"\n", argv[0]);
     fprintf(stderr, "  %s test.bin 0xAA+\\.+0xBB:0xFF\n", argv[0]);
+    fprintf(stderr, "\n" COLOR_YELLOW "Capture group examples / Примеры групп захвата:" COLOR_RESET "\n");
+    fprintf(stderr, "  %s file.txt \"'error':'[\\0]'\"\n", argv[0]);
+    fprintf(stderr, "    " COLOR_CYAN "Wrap 'error' in brackets: error -> [error]" COLOR_RESET "\n");
+    fprintf(stderr, "    " COLOR_CYAN "Обернуть 'error' в скобки: error -> [error]" COLOR_RESET "\n");
+    fprintf(stderr, "  %s file.txt \"'['+{*}+'] '+{*}:'\\2 (\\1)'\"\n", argv[0]);
+    fprintf(stderr, "    " COLOR_CYAN "Swap parts: [ERROR] File not found -> File not found (ERROR)" COLOR_RESET "\n");
+    fprintf(stderr, "    " COLOR_CYAN "Поменять части местами: [ERROR] File not found -> File not found (ERROR)" COLOR_RESET "\n");
+    fprintf(stderr, "  %s file.txt \"'Name: '+{name=*}+', Age: '+{age=*}:'{age}+' years, name='+{name}'\"\n", argv[0]);
+    fprintf(stderr, "    " COLOR_CYAN "Named groups: Name: John, Age: 30 -> 30 years, name=John" COLOR_RESET "\n");
+    fprintf(stderr, "    " COLOR_CYAN "Именованные группы: Name: John, Age: 30 -> 30 years, name=John" COLOR_RESET "\n");
     getchar();
     return 1;
   }
@@ -2369,6 +2417,9 @@ int main(int argc, char* argv[]) {
           fprintf(stderr, "DELETE");
         } else if (operations[i].has_captures_in_replace) {
           fprintf(stderr, "REPLACE with captures");
+          if (operations[i].replace_template) {
+            fprintf(stderr, "\n      Template: '%s'", operations[i].replace_template);
+          }
         } else {
           fprintf(stderr, "REPLACE: ");
           for (size_t j = 0; j < operations[i].replace_len && j < 20; j++) {
@@ -2377,6 +2428,15 @@ int main(int argc, char* argv[]) {
           if (operations[i].replace_len > 20) fprintf(stderr, "...");
         }
         fprintf(stderr, "\n");
+
+        // Show detailed group information
+        if (operations[i].defined_group_count > 0) {
+          fprintf(stderr, "      Defined groups:\n");
+          for (int g = 0; g < operations[i].defined_group_count; g++) {
+            fprintf(stderr, "        [%d] '%s' -> capture index %d\n",
+                    g, operations[i].defined_groups[g].name, operations[i].defined_groups[g].index);
+          }
+        }
       }
       fprintf(stderr, "\n");
     }
@@ -2521,7 +2581,7 @@ int main(int argc, char* argv[]) {
       fprintf(stderr, "  Total replacements: %d\n", total_replacements);
       fprintf(stderr, "  Input size:         %zu bytes\n", buffer_size);
       fprintf(stderr, "  Output size:        %zu bytes\n", result_size);
-      fprintf(stderr, "  Size change:        %+zd bytes\n\n", (ssize_t)result_size - (ssize_t)buffer_size);
+      fprintf(stderr, "  Size change:        %+zd bytes\n\n" COLOR_RED, (ssize_t)result_size - (ssize_t)buffer_size);
     }
   } else {
     result = buffer;
@@ -2584,7 +2644,7 @@ int main(int argc, char* argv[]) {
   if (output_file) free(output_file);
 
   if (debug_mode) {
-    fprintf(stderr, COLOR_GREEN "=== DEBUG MODE COMPLETE ===" COLOR_RESET "\n");
+    fprintf(stderr, COLOR_GREEN "\n=== DEBUG MODE COMPLETE ===" COLOR_RESET "\n");
   }
 
   return 0;
