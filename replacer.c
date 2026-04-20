@@ -36,6 +36,16 @@ typedef struct {
   size_t len;
 } PatternSegment;
 
+// Capture structures
+typedef struct {
+  unsigned char* data;
+  size_t len;
+} CapturedSegment;
+
+typedef struct {
+  CapturedSegment entire_match;  // \0
+} CaptureContext;
+
 typedef struct {
   unsigned char* search_bytes;
   size_t search_len;
@@ -47,6 +57,10 @@ typedef struct {
   PatternType pattern_type;
   PatternSegment* segments;
   int segment_count;
+
+  // Fields for capture support
+  int has_captures_in_replace;  // 1 if replace string contains \0, \1, etc.
+  char* replace_template;       // Original replace string with \0, \1, \2...
 } Operation;
 
 int get_codepage(Encoding enc) {
@@ -92,6 +106,77 @@ int wtext_to_bytes(const wchar_t* wtext, unsigned char** bytes, size_t* len,
   *len = byte_len - 1;
 
   return 1;
+}
+
+// Process escape sequences in text string
+// Returns processed string (caller must free) or NULL on error
+char* process_escape_sequences(const char* text, int* has_wildcards) {
+  size_t len = strlen(text);
+  char* result = (char*)malloc(len + 1);
+  if (!result) return NULL;
+
+  *has_wildcards = 0;
+  size_t out_pos = 0;
+  size_t i = 0;
+
+  while (i < len) {
+    if (text[i] == '\\' && i + 1 < len) {
+      char next = text[i + 1];
+
+      // Check for wildcards
+      if (next == '.' || next == '*' || next == '?') {
+        *has_wildcards = 1;
+        result[out_pos++] = '\\';
+        result[out_pos++] = next;
+        i += 2;
+        continue;
+      }
+
+      // Standard escape sequences
+      switch (next) {
+        case 'n':
+          result[out_pos++] = '\n';
+          i += 2;
+          break;
+        case 'r':
+          result[out_pos++] = '\r';
+          i += 2;
+          break;
+        case 't':
+          result[out_pos++] = '\t';
+          i += 2;
+          break;
+        case '\\':
+          result[out_pos++] = '\\';
+          i += 2;
+          break;
+        case '"':
+          result[out_pos++] = '"';
+          i += 2;
+          break;
+        case 'x':
+          // Hex escape: \xHH
+          if (i + 3 < len && isxdigit(text[i + 2]) && isxdigit(text[i + 3])) {
+            char hex_str[3] = {text[i + 2], text[i + 3], '\0'};
+            result[out_pos++] = (char)strtol(hex_str, NULL, 16);
+            i += 4;
+          } else {
+            // Invalid hex escape - keep as is
+            result[out_pos++] = text[i++];
+          }
+          break;
+        default:
+          // Unknown escape - keep backslash and character
+          result[out_pos++] = text[i++];
+          break;
+      }
+    } else {
+      result[out_pos++] = text[i++];
+    }
+  }
+
+  result[out_pos] = '\0';
+  return result;
 }
 
 int text_to_bytes(const char* text, unsigned char** bytes, size_t* len,
@@ -152,7 +237,10 @@ int is_hex_format(const char* str) {
 
 int is_quoted_string(const char* str) {
   size_t len = strlen(str);
-  return (len >= 2 && str[0] == '"' && str[len - 1] == '"');
+  // Support both single and double quotes
+  return (len >= 2 &&
+          ((str[0] == '"' && str[len - 1] == '"') ||
+           (str[0] == '\'' && str[len - 1] == '\'')));
 }
 
 char* extract_quoted_string(const char* str) {
@@ -167,6 +255,16 @@ char* extract_quoted_string(const char* str) {
   return result;
 }
 
+// Check if replacement string contains capture references (\0, \1, \2, etc.)
+int has_capture_references(const char* str) {
+  for (const char* p = str; *p; p++) {
+    if (*p == '\\' && p[1] >= '0' && p[1] <= '9') {
+      return 1;
+    }
+  }
+  return 0;
+}
+
 int parse_input(const char* input, unsigned char** bytes, size_t* len,
                 Encoding encoding) {
   if (is_hex_format(input)) {
@@ -174,12 +272,202 @@ int parse_input(const char* input, unsigned char** bytes, size_t* len,
   } else if (is_quoted_string(input)) {
     char* text = extract_quoted_string(input);
     if (!text) return 0;
-    int result = text_to_bytes(text, bytes, len, encoding);
+
+    // Check if text contains wildcards
+    int has_wildcards = 0;
+    for (const char* p = text; *p; p++) {
+      if (*p == '\\' && (p[1] == '.' || p[1] == '*' || p[1] == '?')) {
+        has_wildcards = 1;
+        break;
+      }
+    }
+
+    if (has_wildcards) {
+      // Text contains wildcards - cannot convert to bytes directly
+      // Caller should use parse_concatenated_input instead
+      free(text);
+      return 0;
+    }
+
+    // Process escape sequences (no wildcards)
+    int dummy = 0;
+    char* processed = process_escape_sequences(text, &dummy);
     free(text);
+    if (!processed) return 0;
+
+    int result = text_to_bytes(processed, bytes, len, encoding);
+    free(processed);
     return result;
   } else {
-    return text_to_bytes(input, bytes, len, encoding);
+    // Check if unquoted text contains wildcards
+    int has_wildcards = 0;
+    for (const char* p = input; *p; p++) {
+      if (*p == '\\' && (p[1] == '.' || p[1] == '*' || p[1] == '?')) {
+        has_wildcards = 1;
+        break;
+      }
+    }
+
+    if (has_wildcards) {
+      // Text contains wildcards - cannot convert to bytes directly
+      return 0;
+    }
+
+    // Process escape sequences for unquoted text
+    int dummy = 0;
+    char* processed = process_escape_sequences(input, &dummy);
+    if (!processed) return 0;
+
+    int result = text_to_bytes(processed, bytes, len, encoding);
+    free(processed);
+    return result;
   }
+}
+
+// Parse text with embedded wildcards: "test\.end" -> segments
+// Returns array of segments and count
+int parse_text_with_wildcards(const char* text, PatternSegment** segments,
+                               int* segment_count, Encoding encoding) {
+  *segments = NULL;
+  *segment_count = 0;
+
+  // Count segments (split by wildcards)
+  int count = 1;
+  for (const char* p = text; *p; p++) {
+    // Check for both escaped and unescaped wildcards
+    if ((*p == '.' || *p == '*' || *p == '?') ||
+        (*p == '\\' && (p[1] == '.' || p[1] == '*' || p[1] == '?'))) {
+      count += 2;  // literal part + wildcard
+      if (*p == '\\') p++;  // skip next char if escaped
+    }
+  }
+
+  *segments = (PatternSegment*)calloc(count, sizeof(PatternSegment));
+  if (!*segments) return 0;
+
+  int seg_idx = 0;
+  const char* literal_start = text;
+  size_t literal_len = 0;
+
+  for (const char* p = text; *p; p++) {
+    // Check for both escaped (\*) and unescaped (*) wildcards
+    int is_wildcard = 0;
+    char wildcard_char = 0;
+
+    if (*p == '\\' && (p[1] == '.' || p[1] == '*' || p[1] == '?')) {
+      is_wildcard = 1;
+      wildcard_char = p[1];
+    } else if (*p == '.' || *p == '*' || *p == '?') {
+      is_wildcard = 1;
+      wildcard_char = *p;
+    }
+
+    if (is_wildcard) {
+      // Found wildcard - save literal part before it
+      if (literal_len > 0) {
+        char* literal = (char*)malloc(literal_len + 1);
+        if (!literal) {
+          for (int i = 0; i < seg_idx; i++) {
+            if ((*segments)[i].bytes) free((*segments)[i].bytes);
+          }
+          free(*segments);
+          return 0;
+        }
+        strncpy(literal, literal_start, literal_len);
+        literal[literal_len] = '\0';
+
+        // Process escape sequences in literal part
+        int dummy = 0;
+        char* processed = process_escape_sequences(literal, &dummy);
+        free(literal);
+        if (!processed) {
+          for (int i = 0; i < seg_idx; i++) {
+            if ((*segments)[i].bytes) free((*segments)[i].bytes);
+          }
+          free(*segments);
+          return 0;
+        }
+
+        // Convert to bytes
+        (*segments)[seg_idx].is_wildcard = 0;
+        if (!text_to_bytes(processed, &(*segments)[seg_idx].bytes,
+                          &(*segments)[seg_idx].len, encoding)) {
+          free(processed);
+          for (int i = 0; i < seg_idx; i++) {
+            if ((*segments)[i].bytes) free((*segments)[i].bytes);
+          }
+          free(*segments);
+          return 0;
+        }
+        free(processed);
+        seg_idx++;
+      }
+
+      // Add wildcard segment
+      (*segments)[seg_idx].is_wildcard = 1;
+      if (wildcard_char == '.') {
+        (*segments)[seg_idx].wildcard_type = WILDCARD_ANY_BYTE;
+      } else if (wildcard_char == '*') {
+        (*segments)[seg_idx].wildcard_type = WILDCARD_ZERO_OR_MORE;
+      } else if (wildcard_char == '?') {
+        (*segments)[seg_idx].wildcard_type = WILDCARD_OPTIONAL;
+      }
+      (*segments)[seg_idx].bytes = NULL;
+      (*segments)[seg_idx].len = 0;
+      seg_idx++;
+
+      // Skip the wildcard character (and backslash if escaped)
+      if (*p == '\\') p++;  // skip backslash
+      // p will be incremented by loop
+      literal_start = p + 1;
+      literal_len = 0;
+    } else {
+      literal_len++;
+    }
+  }
+
+  // Add remaining literal part
+  if (literal_len > 0) {
+    char* literal = (char*)malloc(literal_len + 1);
+    if (!literal) {
+      for (int i = 0; i < seg_idx; i++) {
+        if ((*segments)[i].bytes) free((*segments)[i].bytes);
+      }
+      free(*segments);
+      return 0;
+    }
+    strncpy(literal, literal_start, literal_len);
+    literal[literal_len] = '\0';
+
+    // Process escape sequences
+    int dummy = 0;
+    char* processed = process_escape_sequences(literal, &dummy);
+    free(literal);
+    if (!processed) {
+      for (int i = 0; i < seg_idx; i++) {
+        if ((*segments)[i].bytes) free((*segments)[i].bytes);
+      }
+      free(*segments);
+      return 0;
+    }
+
+    // Convert to bytes
+    (*segments)[seg_idx].is_wildcard = 0;
+    if (!text_to_bytes(processed, &(*segments)[seg_idx].bytes,
+                      &(*segments)[seg_idx].len, encoding)) {
+      free(processed);
+      for (int i = 0; i < seg_idx; i++) {
+        if ((*segments)[i].bytes) free((*segments)[i].bytes);
+      }
+      free(*segments);
+      return 0;
+    }
+    free(processed);
+    seg_idx++;
+  }
+
+  *segment_count = seg_idx;
+  return 1;
 }
 
 // Parse input with + concatenation: "text"+0x0D0A+"more"
@@ -189,18 +477,63 @@ int parse_concatenated_input(const char* input, PatternSegment** segments,
   *segments = NULL;
   *segment_count = 0;
 
-  // Count segments by counting '+' outside of quotes
-  int count = 1;
+  // First pass: count total segments (including wildcards inside text)
+  int total_count = 0;
   int in_quotes = 0;
-  for (const char* p = input; *p; p++) {
-    if (*p == '"') in_quotes = !in_quotes;
-    if (*p == '+' && !in_quotes) count++;
+  const char* seg_start = input;
+
+  for (const char* p = input; ; p++) {
+    if (*p == '"' || *p == '\'') in_quotes = !in_quotes;
+
+    if ((*p == '+' && !in_quotes) || *p == '\0') {
+      // Extract segment to count wildcards
+      size_t seg_len = p - seg_start;
+      char* segment = (char*)malloc(seg_len + 1);
+      if (!segment) return 0;
+      strncpy(segment, seg_start, seg_len);
+      segment[seg_len] = '\0';
+
+      // Check if it's standalone wildcard: \? \. \* or ? . *
+      int is_standalone = 0;
+      if (seg_len == 2 && segment[0] == '\\' &&
+          (segment[1] == '?' || segment[1] == '.' || segment[1] == '*')) {
+        is_standalone = 1;
+      } else if (seg_len == 1 &&
+                 (segment[0] == '?' || segment[0] == '.' || segment[0] == '*')) {
+        is_standalone = 1;
+      }
+
+      if (is_standalone) {
+        total_count++;
+      } else {
+        // Count wildcards inside text (both escaped and unescaped)
+        // But NOT inside quoted strings
+        int wildcard_count = 0;
+
+        if (!is_quoted_string(segment)) {
+          // Only count wildcards if not a quoted string
+          for (const char* wp = segment; *wp; wp++) {
+            if ((*wp == '.' || *wp == '*' || *wp == '?') ||
+                (*wp == '\\' && (wp[1] == '.' || wp[1] == '*' || wp[1] == '?'))) {
+              wildcard_count++;
+            }
+          }
+        }
+        // Each wildcard splits text: "a\.b\.c" = 5 segments (a, \., b, \., c)
+        total_count += (wildcard_count > 0) ? (wildcard_count * 2 + 1) : 1;
+      }
+
+      free(segment);
+
+      if (*p == '\0') break;
+      seg_start = p + 1;
+    }
   }
 
-  *segments = (PatternSegment*)calloc(count, sizeof(PatternSegment));
+  *segments = (PatternSegment*)calloc(total_count, sizeof(PatternSegment));
   if (!*segments) return 0;
 
-  // Parse each segment
+  // Second pass: parse segments
   char* input_copy = strdup(input);
   if (!input_copy) {
     free(*segments);
@@ -210,10 +543,10 @@ int parse_concatenated_input(const char* input, PatternSegment** segments,
   char* p = input_copy;
   int seg_idx = 0;
   in_quotes = 0;
-  char* seg_start = p;
+  seg_start = p;
 
   while (*p) {
-    if (*p == '"') in_quotes = !in_quotes;
+    if (*p == '"' || *p == '\'') in_quotes = !in_quotes;
 
     if ((*p == '+' && !in_quotes) || *(p + 1) == '\0') {
       // Extract segment
@@ -231,36 +564,101 @@ int parse_concatenated_input(const char* input, PatternSegment** segments,
       strncpy(segment, seg_start, seg_len);
       segment[seg_len] = '\0';
 
-      // Check if it's a wildcard with backslash escape: \? \. \*
+      // Check if it's a standalone wildcard: \? \. \* or ? . *
+      int is_standalone_wildcard = 0;
+      WildcardType wc_type;
+
       if (seg_len == 2 && segment[0] == '\\' &&
           (segment[1] == '?' || segment[1] == '.' || segment[1] == '*')) {
+        is_standalone_wildcard = 1;
+        if (segment[1] == '.') wc_type = WILDCARD_ANY_BYTE;
+        else if (segment[1] == '*') wc_type = WILDCARD_ZERO_OR_MORE;
+        else if (segment[1] == '?') wc_type = WILDCARD_OPTIONAL;
+      } else if (seg_len == 1 &&
+                 (segment[0] == '?' || segment[0] == '.' || segment[0] == '*')) {
+        is_standalone_wildcard = 1;
+        if (segment[0] == '.') wc_type = WILDCARD_ANY_BYTE;
+        else if (segment[0] == '*') wc_type = WILDCARD_ZERO_OR_MORE;
+        else if (segment[0] == '?') wc_type = WILDCARD_OPTIONAL;
+      }
+
+      if (is_standalone_wildcard) {
         (*segments)[seg_idx].is_wildcard = 1;
-        if (segment[1] == '.') {
-          (*segments)[seg_idx].wildcard_type = WILDCARD_ANY_BYTE;
-        } else if (segment[1] == '*') {
-          (*segments)[seg_idx].wildcard_type = WILDCARD_ZERO_OR_MORE;
-        } else if (segment[1] == '?') {
-          (*segments)[seg_idx].wildcard_type = WILDCARD_OPTIONAL;
-        }
+        (*segments)[seg_idx].wildcard_type = wc_type;
         (*segments)[seg_idx].bytes = NULL;
         (*segments)[seg_idx].len = 0;
+        seg_idx++;
       } else {
-        // Parse as hex or text
-        (*segments)[seg_idx].is_wildcard = 0;
-        if (!parse_input(segment, &(*segments)[seg_idx].bytes,
-                         &(*segments)[seg_idx].len, encoding)) {
-          free(segment);
-          free(input_copy);
-          for (int i = 0; i <= seg_idx; i++) {
-            if ((*segments)[i].bytes) free((*segments)[i].bytes);
+        // Check if segment contains wildcards (both escaped and unescaped)
+        // But NOT inside quoted strings
+        int has_wildcards = 0;
+
+        if (!is_quoted_string(segment)) {
+          // Only check for wildcards if not a quoted string
+          for (const char* wp = segment; *wp; wp++) {
+            if ((*wp == '.' || *wp == '*' || *wp == '?') ||
+                (*wp == '\\' && (wp[1] == '.' || wp[1] == '*' || wp[1] == '?'))) {
+              has_wildcards = 1;
+              break;
+            }
           }
-          free(*segments);
-          return 0;
+        }
+
+        if (has_wildcards) {
+          // Parse text with wildcards
+          char* text_to_parse = segment;
+          if (is_quoted_string(segment)) {
+            text_to_parse = extract_quoted_string(segment);
+            if (!text_to_parse) {
+              free(segment);
+              free(input_copy);
+              for (int i = 0; i < seg_idx; i++) {
+                if ((*segments)[i].bytes) free((*segments)[i].bytes);
+              }
+              free(*segments);
+              return 0;
+            }
+          }
+
+          PatternSegment* sub_segments = NULL;
+          int sub_count = 0;
+          if (!parse_text_with_wildcards(text_to_parse, &sub_segments, &sub_count,
+                                         encoding)) {
+            if (text_to_parse != segment) free(text_to_parse);
+            free(segment);
+            free(input_copy);
+            for (int i = 0; i < seg_idx; i++) {
+              if ((*segments)[i].bytes) free((*segments)[i].bytes);
+            }
+            free(*segments);
+            return 0;
+          }
+
+          if (text_to_parse != segment) free(text_to_parse);
+
+          // Copy all sub_segments
+          for (int i = 0; i < sub_count; i++) {
+            (*segments)[seg_idx++] = sub_segments[i];
+          }
+          free(sub_segments);
+        } else {
+          // Parse as hex or text (no wildcards)
+          (*segments)[seg_idx].is_wildcard = 0;
+          if (!parse_input(segment, &(*segments)[seg_idx].bytes,
+                           &(*segments)[seg_idx].len, encoding)) {
+            free(segment);
+            free(input_copy);
+            for (int i = 0; i < seg_idx; i++) {
+              if ((*segments)[i].bytes) free((*segments)[i].bytes);
+            }
+            free(*segments);
+            return 0;
+          }
+          seg_idx++;
         }
       }
 
       free(segment);
-      seg_idx++;
 
       if (*p == '+') {
         seg_start = p + 1;
@@ -558,6 +956,80 @@ size_t match_pattern(unsigned char* buffer, size_t buffer_size,
   return total_matched;
 }
 
+// Build replacement string with capture references (\0 for entire match)
+int build_replacement_with_captures(const char* template,
+                                    CaptureContext* captures,
+                                    Encoding encoding,
+                                    unsigned char** result,
+                                    size_t* result_len) {
+  if (!template || !captures) return 0;
+
+  // First pass: calculate total size needed
+  size_t total_size = 0;
+  const char* p = template;
+
+  while (*p) {
+    if (*p == '\\' && p[1] == '0') {
+      // \0 - entire match
+      total_size += captures->entire_match.len;
+      p += 2;
+    } else if (*p == '\\' && p[1]) {
+      // Escape sequences (\n, \r, \t, \\) - all become 1 byte
+      total_size++;
+      p += 2;
+    } else {
+      total_size++;
+      p++;
+    }
+  }
+
+  // Allocate result buffer
+  *result = (unsigned char*)malloc(total_size);
+  if (!*result) return 0;
+
+  // Second pass: build the replacement
+  size_t pos = 0;
+  p = template;
+
+  while (*p) {
+    if (*p == '\\' && p[1] == '0') {
+      // Substitute \0 with entire match
+      memcpy(*result + pos, captures->entire_match.data, captures->entire_match.len);
+      pos += captures->entire_match.len;
+      p += 2;
+    } else if (*p == '\\' && p[1]) {
+      // Handle escape sequences
+      switch (p[1]) {
+        case 'n':
+          (*result)[pos++] = '\n';
+          p += 2;
+          break;
+        case 'r':
+          (*result)[pos++] = '\r';
+          p += 2;
+          break;
+        case 't':
+          (*result)[pos++] = '\t';
+          p += 2;
+          break;
+        case '\\':
+          (*result)[pos++] = '\\';
+          p += 2;
+          break;
+        default:
+          // Unknown escape - keep as is
+          (*result)[pos++] = *p++;
+          break;
+      }
+    } else {
+      (*result)[pos++] = *p++;
+    }
+  }
+
+  *result_len = total_size;
+  return 1;
+}
+
 int apply_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
                      int op_count, unsigned char** result, size_t* result_size,
                      int* total_replacements) {
@@ -584,8 +1056,25 @@ int apply_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
         if (i + op->search_len <= current_size &&
             memcmp(current + i, op->search_bytes, op->search_len) == 0) {
           if (!op->delete_mode) {
-            memcpy(temp + temp_pos, op->replace_bytes, op->replace_len);
-            temp_pos += op->replace_len;
+            if (op->has_captures_in_replace) {
+              // Build replacement with \0 substitution
+              CaptureContext captures = {0};
+              captures.entire_match.data = current + i;
+              captures.entire_match.len = op->search_len;
+
+              unsigned char* replacement = NULL;
+              size_t replacement_len = 0;
+              if (build_replacement_with_captures(op->replace_template, &captures,
+                                                  ENCODING_UTF8, &replacement, &replacement_len)) {
+                memcpy(temp + temp_pos, replacement, replacement_len);
+                temp_pos += replacement_len;
+                free(replacement);
+              }
+            } else {
+              // Use static replacement
+              memcpy(temp + temp_pos, op->replace_bytes, op->replace_len);
+              temp_pos += op->replace_len;
+            }
           }
           i += op->search_len;
           replacements++;
@@ -599,8 +1088,25 @@ int apply_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
         if (match_len > 0) {
           // Replace matched bytes
           if (!op->delete_mode) {
-            memcpy(temp + temp_pos, op->replace_bytes, op->replace_len);
-            temp_pos += op->replace_len;
+            if (op->has_captures_in_replace) {
+              // Build replacement with \0 substitution
+              CaptureContext captures = {0};
+              captures.entire_match.data = current + i;
+              captures.entire_match.len = match_len;
+
+              unsigned char* replacement = NULL;
+              size_t replacement_len = 0;
+              if (build_replacement_with_captures(op->replace_template, &captures,
+                                                  ENCODING_UTF8, &replacement, &replacement_len)) {
+                memcpy(temp + temp_pos, replacement, replacement_len);
+                temp_pos += replacement_len;
+                free(replacement);
+              }
+            } else {
+              // Use static replacement
+              memcpy(temp + temp_pos, op->replace_bytes, op->replace_len);
+              temp_pos += op->replace_len;
+            }
           }
           i += match_len;
           replacements++;
@@ -622,7 +1128,17 @@ int apply_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
 }
 
 int parse_operation(const char* arg, Operation* op, Encoding encoding) {
-  char* colon = strchr(arg, ':');
+  // Find first colon outside of quotes (both single and double)
+  const char* colon = NULL;
+  int in_quotes = 0;
+  for (const char* p = arg; *p; p++) {
+    if (*p == '"' || *p == '\'') in_quotes = !in_quotes;
+    if (!in_quotes && *p == ':') {
+      colon = p;
+      break;
+    }
+  }
+
   if (!colon) {
     fprintf(stderr,
             "Error: Invalid operation format. Use search:replace or "
@@ -636,11 +1152,19 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
   strncpy(search_str, arg, search_len);
   search_str[search_len] = '\0';
 
-  char* replace_start = colon + 1;
-  char* second_colon = strchr(replace_start, ':');
+  char* replace_start = (char*)(colon + 1);
+  const char* second_colon = NULL;
+  in_quotes = 0;
+  for (const char* p = replace_start; *p; p++) {
+    if (*p == '"' || *p == '\'') in_quotes = !in_quotes;
+    if (!in_quotes && *p == ':') {
+      second_colon = p;
+      break;
+    }
+  }
 
   char* replace_str = NULL;
-  char* encoding_str = NULL;
+  const char* encoding_str = NULL;
 
   if (second_colon) {
     size_t replace_len = second_colon - replace_start;
@@ -660,17 +1184,23 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
   // Check if search string contains '+' or wildcards
   int has_concat = 0;
   int has_wildcard = 0;
-  int in_quotes = 0;
+
+  in_quotes = 0;
   for (const char* p = search_str; *p; p++) {
-    if (*p == '"') in_quotes = !in_quotes;
-    if (!in_quotes) {
-      if (*p == '+') has_concat = 1;
-      if (*p == '.' || *p == '*' || *p == '?') has_wildcard = 1;
+    if (*p == '"' || *p == '\'') in_quotes = !in_quotes;
+    if (!in_quotes && *p == '+') has_concat = 1;
+    // Check for both escaped and unescaped wildcards (outside quotes)
+    if (!in_quotes && (*p == '.' || *p == '*' || *p == '?')) {
+      has_wildcard = 1;
+    }
+    if (*p == '\\' && (p[1] == '.' || p[1] == '*' || p[1] == '?')) {
+      has_wildcard = 1;
     }
   }
 
-  if (has_concat || has_wildcard) {
-    // Use wildcard pattern matching
+
+  if (has_concat) {
+    // Use concatenation parsing (handles both + and wildcards)
     op->pattern_type = PATTERN_WILDCARD;
     if (!parse_concatenated_input(search_str, &op->segments, &op->segment_count,
                                   encoding)) {
@@ -678,7 +1208,32 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
       free(replace_str);
       return 0;
     }
-    // Set search_bytes to NULL for wildcard patterns
+    op->search_bytes = NULL;
+    op->search_len = 0;
+  } else if (has_wildcard) {
+    // Use text with wildcards parsing (no + concatenation)
+    op->pattern_type = PATTERN_WILDCARD;
+
+    // Extract text from quotes if needed
+    char* text_to_parse = search_str;
+    if (is_quoted_string(search_str)) {
+      text_to_parse = extract_quoted_string(search_str);
+      if (!text_to_parse) {
+        free(search_str);
+        free(replace_str);
+        return 0;
+      }
+    }
+
+    if (!parse_text_with_wildcards(text_to_parse, &op->segments, &op->segment_count,
+                                   encoding)) {
+      if (text_to_parse != search_str) free(text_to_parse);
+      free(search_str);
+      free(replace_str);
+      return 0;
+    }
+
+    if (text_to_parse != search_str) free(text_to_parse);
     op->search_bytes = NULL;
     op->search_len = 0;
   } else {
@@ -705,7 +1260,7 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
     int replace_has_concat = 0;
     in_quotes = 0;
     for (const char* p = replace_str; *p; p++) {
-      if (*p == '"') in_quotes = !in_quotes;
+      if (*p == '"' || *p == '\'') in_quotes = !in_quotes;
       if (!in_quotes && *p == '+') {
         replace_has_concat = 1;
         break;
@@ -789,6 +1344,19 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
     }
   }
 
+  // Check if replace string contains capture references (\0, \1, etc.)
+  op->has_captures_in_replace = has_capture_references(replace_str);
+  if (op->has_captures_in_replace) {
+    // Extract text from quotes if needed
+    if (is_quoted_string(replace_str)) {
+      op->replace_template = extract_quoted_string(replace_str);
+    } else {
+      op->replace_template = strdup(replace_str);
+    }
+  } else {
+    op->replace_template = NULL;
+  }
+
   free(search_str);
   free(replace_str);
   return 1;
@@ -797,6 +1365,7 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
 void free_operation(Operation* op) {
   if (op->search_bytes) free(op->search_bytes);
   if (op->replace_bytes) free(op->replace_bytes);
+  if (op->replace_template) free(op->replace_template);
 
   // Free pattern segments
   if (op->segments) {
@@ -817,14 +1386,13 @@ int main(int argc, char* argv[]) {
 
   if (argc < 2) {
     fprintf(stderr,
-            "\n" COLOR_YELLOW "REPLACER" COLOR_RESET "        - " COLOR_CYAN
+            "\n" COLOR_YELLOW "REPLACER " COLOR_YELLOW "v26.0420 - " COLOR_CYAN
             "File content search and replace utility with encoding "
             "conversion" COLOR_RESET "\n");
     fprintf(stderr,
-            "                  Утилита поиска и замены содержимого файлов с "
+            "                    Утилита поиска и замены содержимого файлов с "
             "конвертацией кодировок\n");
-    fprintf(stderr, COLOR_YELLOW "v26.0418" COLOR_RESET
-                                 " (by BoyNG - Vyacheslav Burnosov)\n\n\n");
+    fprintf(stderr, "(By BoyNG - \nVyacheslav Burnosov)\n\n\n");
     fprintf(stderr,
             COLOR_YELLOW "Usage / Использование:" COLOR_RESET " %s " COLOR_GREEN
                          "[encoding:]<input>[:[encoding][:output]]" COLOR_RESET
