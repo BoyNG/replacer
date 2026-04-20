@@ -10,6 +10,11 @@
 #define COLOR_YELLOW "\033[1;33m"
 #define COLOR_GREEN "\033[1;32m"
 #define COLOR_CYAN "\033[1;36m"
+#define COLOR_RED "\033[1;31m"
+
+// Capture groups constants
+#define MAX_GROUP_NAME_LEN 32
+#define MAX_CAPTURE_GROUPS 99
 
 typedef enum {
   ENCODING_UTF8,
@@ -29,11 +34,20 @@ typedef enum {
   WILDCARD_OPTIONAL       // ? - zero or one byte
 } WildcardType;
 
+// Named group mapping
+typedef struct {
+  char name[MAX_GROUP_NAME_LEN + 1];  // Group name
+  int index;                           // Index in captures array
+} NamedGroup;
+
 typedef struct {
   int is_wildcard;
   WildcardType wildcard_type;
   unsigned char* bytes;
   size_t len;
+  int is_capture_group;                    // NEW: 1 if this segment is in {...}
+  int capture_group_index;                 // NEW: Index in captures[] (-1 if not a group)
+  char group_name[MAX_GROUP_NAME_LEN + 1]; // NEW: Group name (empty if numbered)
 } PatternSegment;
 
 // Capture structures
@@ -43,7 +57,11 @@ typedef struct {
 } CapturedSegment;
 
 typedef struct {
-  CapturedSegment entire_match;  // \0
+  CapturedSegment entire_match;                 // \0
+  CapturedSegment captures[MAX_CAPTURE_GROUPS]; // NEW: All captures (numbered + named)
+  int capture_count;                            // NEW: Total number of captures
+  NamedGroup named_groups[MAX_CAPTURE_GROUPS];  // NEW: Name to index mapping
+  int named_group_count;                        // NEW: Number of named groups
 } CaptureContext;
 
 typedef struct {
@@ -53,15 +71,89 @@ typedef struct {
   size_t replace_len;
   int delete_mode;
 
-  // New fields for wildcard support
+  // Fields for wildcard support
   PatternType pattern_type;
   PatternSegment* segments;
   int segment_count;
 
   // Fields for capture support
-  int has_captures_in_replace;  // 1 if replace string contains \0, \1, etc.
-  char* replace_template;       // Original replace string with \0, \1, \2...
+  int has_captures_in_replace;  // 1 if replace string contains \0, \1, {name}, etc.
+  char* replace_template;       // Original replace string with \0, \1, {name}...
+
+  // NEW: Named groups defined in search pattern
+  NamedGroup defined_groups[MAX_CAPTURE_GROUPS];
+  int defined_group_count;
 } Operation;
+
+// ============================================================================
+// Bilingual error message helpers
+// ============================================================================
+
+void print_error(const char* msg_en, const char* msg_ru) {
+  fprintf(stderr, COLOR_RED "Error: " COLOR_RESET "%s\n", msg_en);
+  fprintf(stderr, COLOR_RED "Ошибка: " COLOR_RESET "%s\n", msg_ru);
+}
+
+void print_error_pos(const char* msg_en, const char* msg_ru, int pos) {
+  fprintf(stderr, COLOR_RED "Error: " COLOR_RESET "%s %d\n", msg_en, pos);
+  fprintf(stderr, COLOR_RED "Ошибка: " COLOR_RESET "%s %d\n", msg_ru, pos);
+}
+
+void print_error_str(const char* msg_en, const char* msg_ru, const char* str) {
+  fprintf(stderr, COLOR_RED "Error: " COLOR_RESET "%s '%s'\n", msg_en, str);
+  fprintf(stderr, COLOR_RED "Ошибка: " COLOR_RESET "%s '%s'\n", msg_ru, str);
+}
+
+void print_error_char(const char* msg_en, const char* msg_ru, char c, int pos) {
+  fprintf(stderr, COLOR_RED "Error: " COLOR_RESET "%s '%c' at position %d\n", msg_en, c, pos);
+  fprintf(stderr, COLOR_RED "Ошибка: " COLOR_RESET "%s '%c' в позиции %d\n", msg_ru, c, pos);
+}
+
+// Validate group name: [a-zA-Z][a-zA-Z0-9_]*, max 32 chars
+int validate_group_name(const char* name, int len, int pos) {
+  if (len == 0) {
+    print_error_pos(
+      "Empty capture group name '{:...}' at position",
+      "Пустое имя группы захвата '{:...}' в позиции",
+      pos
+    );
+    return 0;
+  }
+
+  if (len > MAX_GROUP_NAME_LEN) {
+    print_error_pos(
+      "Group name too long (max 32 characters) at position",
+      "Слишком длинное имя группы (максимум 32 символа) в позиции",
+      pos
+    );
+    return 0;
+  }
+
+  if (!isalpha((unsigned char)name[0])) {
+    print_error_pos(
+      "Group name must start with a letter at position",
+      "Имя группы должно начинаться с буквы в позиции",
+      pos
+    );
+    return 0;
+  }
+
+  for (int i = 0; i < len; i++) {
+    char c = name[i];
+    if (!isalnum((unsigned char)c) && c != '_') {
+      print_error_char(
+        "Invalid character in group name (use only: a-z, A-Z, 0-9, _)",
+        "Недопустимый символ в имени группы (используйте только: a-z, A-Z, 0-9, _)",
+        c, pos + i
+      );
+      return 0;
+    }
+  }
+
+  return 1;
+}
+
+// ============================================================================
 
 int get_codepage(Encoding enc) {
   switch (enc) {
@@ -256,9 +348,22 @@ char* extract_quoted_string(const char* str) {
 }
 
 // Check if replacement string contains capture references (\0, \1, \2, etc.)
+// Check if replacement string contains capture references (\0-\9, {name})
 int has_capture_references(const char* str) {
+  int in_quotes = 0;
   for (const char* p = str; *p; p++) {
+    if (*p == '"' || *p == '\'') {
+      in_quotes = !in_quotes;
+      continue;
+    }
+
+    // \0-\9 work everywhere
     if (*p == '\\' && p[1] >= '0' && p[1] <= '9') {
+      return 1;
+    }
+
+    // {name} only outside quotes
+    if (!in_quotes && *p == '{' && p[1] != '\0') {
       return 1;
     }
   }
@@ -672,6 +777,294 @@ int parse_concatenated_input(const char* input, PatternSegment** segments,
   return 1;
 }
 
+// ============================================================================
+// NEW: Parse input with capture groups: {pattern} or {name:pattern}
+// ============================================================================
+int parse_concatenated_input_with_captures(const char* input,
+                                           PatternSegment** segments,
+                                           int* segment_count,
+                                           Encoding encoding,
+                                           NamedGroup* defined_groups,
+                                           int* defined_group_count) {
+  *segments = NULL;
+  *segment_count = 0;
+  *defined_group_count = 0;
+
+  typedef struct {
+    PatternSegment* segments;
+    int segment_count;
+    int group_index;
+    char name[MAX_GROUP_NAME_LEN + 1];
+    int is_named;
+  } GroupInfo;
+
+  GroupInfo groups[MAX_CAPTURE_GROUPS];
+  int group_count = 0;
+  int numbered_count = 0;
+
+  // Phase 1: Find all {...} and validate
+  typedef struct {
+    int start_pos;
+    int end_pos;
+  } BracePos;
+
+  BracePos brace_positions[MAX_CAPTURE_GROUPS];
+  int brace_count = 0;
+
+  int in_quotes = 0;
+  int brace_depth = 0;
+  const char* brace_start = NULL;
+
+  for (const char* p = input; *p; p++) {
+    if (*p == '"' || *p == '\'') {
+      in_quotes = !in_quotes;
+    }
+
+    if (!in_quotes) {
+      if (*p == '{') {
+        if (brace_depth == 0) brace_start = p;
+        brace_depth++;
+      } else if (*p == '}') {
+        brace_depth--;
+        if (brace_depth == 0 && brace_start) {
+          if (brace_count >= MAX_CAPTURE_GROUPS) {
+            print_error("Too many capture groups (max 99)", "Слишком много групп захвата (максимум 99)");
+            return 0;
+          }
+          brace_positions[brace_count].start_pos = brace_start - input;
+          brace_positions[brace_count].end_pos = p - input;
+          brace_count++;
+          brace_start = NULL;
+        }
+      }
+    }
+  }
+
+  if (brace_depth != 0) {
+    print_error("Unclosed capture group '{'", "Незакрытая группа захвата '{'");
+    return 0;
+  }
+
+  // Phase 2: Parse each group and literal parts separately
+  int current_pos = 0;
+  PatternSegment* all_segments = NULL;
+  int total_segment_count = 0;
+  int total_segment_capacity = 100;
+
+  all_segments = (PatternSegment*)calloc(total_segment_capacity, sizeof(PatternSegment));
+  if (!all_segments) return 0;
+
+  for (int brace_idx = 0; brace_idx <= brace_count; brace_idx++) {
+    // Parse literal part before this brace (or after last brace)
+    int literal_start = current_pos;
+    int literal_end = (brace_idx < brace_count) ? brace_positions[brace_idx].start_pos : strlen(input);
+
+    if (literal_end > literal_start) {
+      // Extract literal part
+      int literal_len = literal_end - literal_start;
+      char* literal = (char*)malloc(literal_len + 1);
+      if (!literal) {
+        for (int i = 0; i < total_segment_count; i++) {
+          if (all_segments[i].bytes) free(all_segments[i].bytes);
+        }
+        free(all_segments);
+        return 0;
+      }
+      strncpy(literal, input + literal_start, literal_len);
+      literal[literal_len] = '\0';
+
+      // Parse literal part
+      PatternSegment* literal_segments = NULL;
+      int literal_seg_count = 0;
+
+      if (!parse_concatenated_input(literal, &literal_segments, &literal_seg_count, encoding)) {
+        free(literal);
+        for (int i = 0; i < total_segment_count; i++) {
+          if (all_segments[i].bytes) free(all_segments[i].bytes);
+        }
+        free(all_segments);
+        return 0;
+      }
+
+      // Add to all_segments (not capture groups)
+      for (int i = 0; i < literal_seg_count; i++) {
+        if (total_segment_count >= total_segment_capacity) {
+          total_segment_capacity *= 2;
+          all_segments = (PatternSegment*)realloc(all_segments, total_segment_capacity * sizeof(PatternSegment));
+          if (!all_segments) {
+            free(literal);
+            for (int j = 0; j < literal_seg_count; j++) {
+              if (literal_segments[j].bytes) free(literal_segments[j].bytes);
+            }
+            free(literal_segments);
+            return 0;
+          }
+        }
+        all_segments[total_segment_count] = literal_segments[i];
+        all_segments[total_segment_count].is_capture_group = 0;
+        all_segments[total_segment_count].capture_group_index = -1;
+        all_segments[total_segment_count].group_name[0] = '\0';
+        total_segment_count++;
+      }
+
+      free(literal_segments);
+      free(literal);
+    }
+
+    // Parse group content if this is not the last iteration
+    if (brace_idx < brace_count) {
+      int group_start = brace_positions[brace_idx].start_pos + 1;
+      int group_end = brace_positions[brace_idx].end_pos;
+      int group_len = group_end - group_start;
+
+      char* group_content = (char*)malloc(group_len + 1);
+      if (!group_content) {
+        for (int i = 0; i < total_segment_count; i++) {
+          if (all_segments[i].bytes) free(all_segments[i].bytes);
+        }
+        free(all_segments);
+        return 0;
+      }
+      strncpy(group_content, input + group_start, group_len);
+      group_content[group_len] = '\0';
+
+      // Check if named: {name=pattern}
+      char* equals = strchr(group_content, '=');
+      char* pattern_part = group_content;
+      int is_named = 0;
+      char group_name[MAX_GROUP_NAME_LEN + 1] = {0};
+
+      if (equals && equals > group_content) {
+        int name_len = equals - group_content;
+        if (!validate_group_name(group_content, name_len, group_start)) {
+          free(group_content);
+          for (int i = 0; i < total_segment_count; i++) {
+            if (all_segments[i].bytes) free(all_segments[i].bytes);
+          }
+          free(all_segments);
+          return 0;
+        }
+
+        // Check duplicates
+        for (int i = 0; i < group_count; i++) {
+          if (groups[i].is_named && strncmp(groups[i].name, group_content, name_len) == 0 &&
+              groups[i].name[name_len] == '\0') {
+            char temp[MAX_GROUP_NAME_LEN + 1];
+            strncpy(temp, group_content, name_len);
+            temp[name_len] = '\0';
+            print_error_str("Duplicate capture group name", "Дублирующееся имя группы захвата", temp);
+            free(group_content);
+            for (int i = 0; i < total_segment_count; i++) {
+              if (all_segments[i].bytes) free(all_segments[i].bytes);
+            }
+            free(all_segments);
+            return 0;
+          }
+        }
+
+        strncpy(group_name, group_content, name_len);
+        group_name[name_len] = '\0';
+        pattern_part = equals + 1;
+        is_named = 1;
+      } else {
+        numbered_count++;
+        if (numbered_count > 9) {
+          print_error("Too many numbered capture groups (max 9)", "Слишком много нумерованных групп захвата (максимум 9)");
+          free(group_content);
+          for (int i = 0; i < total_segment_count; i++) {
+            if (all_segments[i].bytes) free(all_segments[i].bytes);
+          }
+          free(all_segments);
+          return 0;
+        }
+      }
+
+      // Parse group pattern
+      PatternSegment* group_segments = NULL;
+      int group_seg_count = 0;
+
+      if (!parse_concatenated_input(pattern_part, &group_segments, &group_seg_count, encoding)) {
+        free(group_content);
+        for (int i = 0; i < total_segment_count; i++) {
+          if (all_segments[i].bytes) free(all_segments[i].bytes);
+        }
+        free(all_segments);
+        return 0;
+      }
+
+      // Add to all_segments (mark as capture group)
+      for (int i = 0; i < group_seg_count; i++) {
+        if (total_segment_count >= total_segment_capacity) {
+          total_segment_capacity *= 2;
+          all_segments = (PatternSegment*)realloc(all_segments, total_segment_capacity * sizeof(PatternSegment));
+          if (!all_segments) {
+            free(group_content);
+            for (int j = 0; j < group_seg_count; j++) {
+              if (group_segments[j].bytes) free(group_segments[j].bytes);
+            }
+            free(group_segments);
+            return 0;
+          }
+        }
+        all_segments[total_segment_count] = group_segments[i];
+        all_segments[total_segment_count].is_capture_group = 1;
+        all_segments[total_segment_count].capture_group_index = group_count;
+        if (is_named) {
+          strcpy(all_segments[total_segment_count].group_name, group_name);
+        } else {
+          all_segments[total_segment_count].group_name[0] = '\0';
+        }
+        total_segment_count++;
+      }
+
+      // Save group info
+      groups[group_count].segments = group_segments;
+      groups[group_count].segment_count = group_seg_count;
+      groups[group_count].group_index = group_count;
+      groups[group_count].is_named = is_named;
+      if (is_named) {
+        strcpy(groups[group_count].name, group_name);
+      } else {
+        groups[group_count].name[0] = '\0';
+      }
+      group_count++;
+
+      free(group_segments);
+      free(group_content);
+
+      current_pos = brace_positions[brace_idx].end_pos + 1;
+    }
+  }
+
+  // Phase 3: Build defined_groups
+  for (int i = 0; i < group_count; i++) {
+    if (groups[i].is_named) {
+      strcpy(defined_groups[*defined_group_count].name, groups[i].name);
+      defined_groups[*defined_group_count].index = groups[i].group_index;
+      (*defined_group_count)++;
+    }
+  }
+
+  // Phase 4: Remove empty segments (artifacts from parsing)
+  int final_count = 0;
+  for (int i = 0; i < total_segment_count; i++) {
+    if (all_segments[i].is_wildcard || all_segments[i].len > 0) {
+      if (final_count != i) {
+        all_segments[final_count] = all_segments[i];
+      }
+      final_count++;
+    } else {
+      // Free empty segment
+      if (all_segments[i].bytes) free(all_segments[i].bytes);
+    }
+  }
+  total_segment_count = final_count;
+
+  *segments = all_segments;
+  *segment_count = total_segment_count;
+  return 1;
+}
+
 int parse_file_spec(const char* spec, char** input_file, char** output_file,
                     Encoding* input_enc, Encoding* output_enc, int* use_stdio) {
   *input_enc = ENCODING_UTF8;
@@ -956,7 +1349,142 @@ size_t match_pattern(unsigned char* buffer, size_t buffer_size,
   return total_matched;
 }
 
-// Build replacement string with capture references (\0 for entire match)
+// ============================================================================
+// NEW: Match pattern with capture groups support
+// ============================================================================
+size_t match_pattern_with_captures(unsigned char* buffer, size_t buffer_size,
+                                   PatternSegment* segments, int segment_count,
+                                   size_t start_pos, CaptureContext* captures) {
+  size_t pos = start_pos;
+  size_t total_matched = 0;
+
+  // Track capture group boundaries
+  typedef struct {
+    size_t start;
+    size_t length;
+    int active;
+  } GroupBoundary;
+
+  GroupBoundary boundaries[MAX_CAPTURE_GROUPS] = {0};
+  int current_group_idx = -1;
+
+  for (int seg_idx = 0; seg_idx < segment_count; seg_idx++) {
+    PatternSegment* seg = &segments[seg_idx];
+
+    // Check if entering/exiting capture groups
+    if (seg->is_capture_group) {
+      // Entering or continuing a capture group
+      if (seg->capture_group_index != current_group_idx) {
+        // Close previous group if any
+        if (current_group_idx >= 0 && current_group_idx < MAX_CAPTURE_GROUPS) {
+          boundaries[current_group_idx].active = 0;
+        }
+        // Start new group
+        current_group_idx = seg->capture_group_index;
+        if (current_group_idx >= 0 && current_group_idx < MAX_CAPTURE_GROUPS) {
+          boundaries[current_group_idx].start = pos;
+          boundaries[current_group_idx].length = 0;
+          boundaries[current_group_idx].active = 1;
+        }
+      }
+    } else {
+      // Not in a capture group - close current group if any
+      if (current_group_idx >= 0 && current_group_idx < MAX_CAPTURE_GROUPS) {
+        boundaries[current_group_idx].active = 0;
+      }
+      current_group_idx = -1;
+    }
+
+    size_t matched_len = 0;
+
+    if (!seg->is_wildcard) {
+      // Literal bytes - exact match
+      if (pos + seg->len > buffer_size) return 0;
+      if (memcmp(buffer + pos, seg->bytes, seg->len) != 0) return 0;
+      matched_len = seg->len;
+    } else {
+      // Wildcard matching (same logic as original match_pattern)
+      if (seg->wildcard_type == WILDCARD_ANY_BYTE) {
+        if (pos >= buffer_size) return 0;
+        matched_len = 1;
+      } else if (seg->wildcard_type == WILDCARD_OPTIONAL) {
+        if (seg_idx == segment_count - 1) {
+          if (pos < buffer_size) {
+            matched_len = 1;
+          }
+        } else {
+          PatternSegment* next_seg = &segments[seg_idx + 1];
+          if (!next_seg->is_wildcard) {
+            int matched_with_byte = 0;
+            if (pos < buffer_size) {
+              size_t test_pos = pos + 1;
+              if (test_pos + next_seg->len <= buffer_size &&
+                  memcmp(buffer + test_pos, next_seg->bytes, next_seg->len) == 0) {
+                matched_len = 1;
+                matched_with_byte = 1;
+              }
+            }
+            if (!matched_with_byte) {
+              if (pos + next_seg->len <= buffer_size &&
+                  memcmp(buffer + pos, next_seg->bytes, next_seg->len) == 0) {
+                matched_len = 0;
+              } else {
+                return 0;
+              }
+            }
+          } else {
+            if (pos < buffer_size) {
+              matched_len = 1;
+            }
+          }
+        }
+      } else if (seg->wildcard_type == WILDCARD_ZERO_OR_MORE) {
+        if (seg_idx == segment_count - 1) {
+          matched_len = buffer_size - pos;
+        } else {
+          PatternSegment* next_seg = &segments[seg_idx + 1];
+          if (!next_seg->is_wildcard) {
+            size_t found_pos = buffer_size;
+            for (size_t i = pos; i <= buffer_size - next_seg->len; i++) {
+              if (memcmp(buffer + i, next_seg->bytes, next_seg->len) == 0) {
+                found_pos = i;
+                break;
+              }
+            }
+            if (found_pos == buffer_size) return 0;
+            matched_len = found_pos - pos;
+          } else {
+            matched_len = 0;
+          }
+        }
+      }
+    }
+
+    pos += matched_len;
+    total_matched += matched_len;
+
+    // Accumulate length for current group
+    if (current_group_idx >= 0 && current_group_idx < MAX_CAPTURE_GROUPS &&
+        boundaries[current_group_idx].active) {
+      boundaries[current_group_idx].length += matched_len;
+    }
+  }
+
+  // Save all captured groups
+  for (int i = 0; i < MAX_CAPTURE_GROUPS; i++) {
+    if (boundaries[i].length > 0) {
+      captures->captures[i].data = buffer + boundaries[i].start;
+      captures->captures[i].len = boundaries[i].length;
+      if (i + 1 > captures->capture_count) {
+        captures->capture_count = i + 1;
+      }
+    }
+  }
+
+  return total_matched;
+}
+
+// Build replacement string with capture references (\0-\9, {name})
 int build_replacement_with_captures(const char* template,
                                     CaptureContext* captures,
                                     Encoding encoding,
@@ -967,14 +1495,69 @@ int build_replacement_with_captures(const char* template,
   // First pass: calculate total size needed
   size_t total_size = 0;
   const char* p = template;
+  int in_quotes = 0;
 
   while (*p) {
-    if (*p == '\\' && p[1] == '0') {
-      // \0 - entire match
-      total_size += captures->entire_match.len;
+    if (*p == '"' || *p == '\'') {
+      in_quotes = !in_quotes;
+      p++;
+      continue;
+    }
+
+    // Skip + outside quotes (concatenation operator)
+    if (!in_quotes && *p == '+') {
+      p++;
+      continue;
+    }
+
+    if (*p == '\\' && p[1] >= '0' && p[1] <= '9') {
+      // \0-\9
+      int num = p[1] - '0';
+      if (num == 0) {
+        total_size += captures->entire_match.len;
+      } else if (num <= captures->capture_count) {
+        total_size += captures->captures[num - 1].len;
+      }
       p += 2;
+    } else if (!in_quotes && *p == '{') {
+      // {name} - find closing }
+      const char* close = strchr(p + 1, '}');
+      if (close) {
+        int name_len = close - p - 1;
+        char name[MAX_GROUP_NAME_LEN + 1];
+        if (name_len > 0 && name_len <= MAX_GROUP_NAME_LEN) {
+          strncpy(name, p + 1, name_len);
+          name[name_len] = '\0';
+
+          // Find in named groups
+          int found = 0;
+          for (int i = 0; i < captures->named_group_count; i++) {
+            if (strcmp(captures->named_groups[i].name, name) == 0) {
+              int idx = captures->named_groups[i].index;
+              if (idx < captures->capture_count) {
+                total_size += captures->captures[idx].len;
+              }
+              found = 1;
+              break;
+            }
+          }
+
+          if (!found) {
+            print_error_str(
+              "Unknown capture group in replacement",
+              "Неизвестная группа захвата в замене",
+              name
+            );
+            return 0;
+          }
+        }
+        p = close + 1;
+      } else {
+        total_size++;
+        p++;
+      }
     } else if (*p == '\\' && p[1]) {
-      // Escape sequences (\n, \r, \t, \\) - all become 1 byte
+      // Escape sequences
       total_size++;
       p += 2;
     } else {
@@ -988,41 +1571,85 @@ int build_replacement_with_captures(const char* template,
   if (!*result) return 0;
 
   // Second pass: build the replacement
-  size_t pos = 0;
+  size_t out_pos = 0;
   p = template;
+  in_quotes = 0;
 
   while (*p) {
-    if (*p == '\\' && p[1] == '0') {
-      // Substitute \0 with entire match
-      memcpy(*result + pos, captures->entire_match.data, captures->entire_match.len);
-      pos += captures->entire_match.len;
+    if (*p == '"' || *p == '\'') {
+      in_quotes = !in_quotes;
+      p++;
+      continue;
+    }
+
+    // Skip + outside quotes (concatenation operator)
+    if (!in_quotes && *p == '+') {
+      p++;
+      continue;
+    }
+
+    if (*p == '\\' && p[1] >= '0' && p[1] <= '9') {
+      // \0-\9
+      int num = p[1] - '0';
+      if (num == 0) {
+        memcpy(*result + out_pos, captures->entire_match.data, captures->entire_match.len);
+        out_pos += captures->entire_match.len;
+      } else if (num <= captures->capture_count) {
+        memcpy(*result + out_pos, captures->captures[num - 1].data, captures->captures[num - 1].len);
+        out_pos += captures->captures[num - 1].len;
+      }
       p += 2;
+    } else if (!in_quotes && *p == '{') {
+      // {name}
+      const char* close = strchr(p + 1, '}');
+      if (close) {
+        int name_len = close - p - 1;
+        char name[MAX_GROUP_NAME_LEN + 1];
+        if (name_len > 0 && name_len <= MAX_GROUP_NAME_LEN) {
+          strncpy(name, p + 1, name_len);
+          name[name_len] = '\0';
+
+          for (int i = 0; i < captures->named_group_count; i++) {
+            if (strcmp(captures->named_groups[i].name, name) == 0) {
+              int idx = captures->named_groups[i].index;
+              if (idx < captures->capture_count) {
+                memcpy(*result + out_pos, captures->captures[idx].data, captures->captures[idx].len);
+                out_pos += captures->captures[idx].len;
+              }
+              break;
+            }
+          }
+        }
+        p = close + 1;
+      } else {
+        (*result)[out_pos++] = *p++;
+      }
     } else if (*p == '\\' && p[1]) {
       // Handle escape sequences
       switch (p[1]) {
         case 'n':
-          (*result)[pos++] = '\n';
+          (*result)[out_pos++] = '\n';
           p += 2;
           break;
         case 'r':
-          (*result)[pos++] = '\r';
+          (*result)[out_pos++] = '\r';
           p += 2;
           break;
         case 't':
-          (*result)[pos++] = '\t';
+          (*result)[out_pos++] = '\t';
           p += 2;
           break;
         case '\\':
-          (*result)[pos++] = '\\';
+          (*result)[out_pos++] = '\\';
           p += 2;
           break;
         default:
           // Unknown escape - keep as is
-          (*result)[pos++] = *p++;
+          (*result)[out_pos++] = *p++;
           break;
       }
     } else {
-      (*result)[pos++] = *p++;
+      (*result)[out_pos++] = *p++;
     }
   }
 
@@ -1082,18 +1709,26 @@ int apply_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
           temp[temp_pos++] = current[i++];
         }
       } else {
-        // New wildcard matching
-        size_t match_len = match_pattern(current, current_size, op->segments,
-                                         op->segment_count, i);
+        // Wildcard matching with capture groups
+        CaptureContext captures = {0};
+        captures.entire_match.data = current + i;
+
+        // Copy named groups from operation
+        for (int ng = 0; ng < op->defined_group_count; ng++) {
+          captures.named_groups[ng] = op->defined_groups[ng];
+        }
+        captures.named_group_count = op->defined_group_count;
+
+        size_t match_len = match_pattern_with_captures(current, current_size, op->segments,
+                                         op->segment_count, i, &captures);
         if (match_len > 0) {
+          // Update entire_match length
+          captures.entire_match.len = match_len;
+
           // Replace matched bytes
           if (!op->delete_mode) {
             if (op->has_captures_in_replace) {
-              // Build replacement with \0 substitution
-              CaptureContext captures = {0};
-              captures.entire_match.data = current + i;
-              captures.entire_match.len = match_len;
-
+              // Build replacement with captures
               unsigned char* replacement = NULL;
               size_t replacement_len = 0;
               if (build_replacement_with_captures(op->replace_template, &captures,
@@ -1128,14 +1763,21 @@ int apply_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
 }
 
 int parse_operation(const char* arg, Operation* op, Encoding encoding) {
-  // Find first colon outside of quotes (both single and double)
+  // Find first colon outside of quotes AND outside of braces
   const char* colon = NULL;
   int in_quotes = 0;
+  int brace_depth = 0;
   for (const char* p = arg; *p; p++) {
-    if (*p == '"' || *p == '\'') in_quotes = !in_quotes;
-    if (!in_quotes && *p == ':') {
-      colon = p;
-      break;
+    if (*p == '"' || *p == '\'') {
+      in_quotes = !in_quotes;
+    }
+    if (!in_quotes) {
+      if (*p == '{') brace_depth++;
+      if (*p == '}') brace_depth--;
+      if (*p == ':' && brace_depth == 0) {
+        colon = p;
+        break;
+      }
     }
   }
 
@@ -1155,11 +1797,18 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
   char* replace_start = (char*)(colon + 1);
   const char* second_colon = NULL;
   in_quotes = 0;
+  brace_depth = 0;
   for (const char* p = replace_start; *p; p++) {
-    if (*p == '"' || *p == '\'') in_quotes = !in_quotes;
-    if (!in_quotes && *p == ':') {
-      second_colon = p;
-      break;
+    if (*p == '"' || *p == '\'') {
+      in_quotes = !in_quotes;
+    }
+    if (!in_quotes) {
+      if (*p == '{') brace_depth++;
+      if (*p == '}') brace_depth--;
+      if (*p == ':' && brace_depth == 0) {
+        second_colon = p;
+        break;
+      }
     }
   }
 
@@ -1181,14 +1830,38 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
     replace_str = strdup(replace_start);
   }
 
-  // Check if search string contains '+' or wildcards
+  // Check if search string contains '+', wildcards, or capture groups
   int has_concat = 0;
   int has_wildcard = 0;
+  int has_capture_groups = 0;
 
   in_quotes = 0;
+  brace_depth = 0;
   for (const char* p = search_str; *p; p++) {
     if (*p == '"' || *p == '\'') in_quotes = !in_quotes;
     if (!in_quotes && *p == '+') has_concat = 1;
+
+    // Check for capture group definition: {pattern} or {name=pattern}
+    // NOT just {name} (which is a reference)
+    if (!in_quotes && *p == '{') {
+      // Look ahead to see if this is a group definition
+      const char* close = strchr(p + 1, '}');
+      if (close) {
+        int content_len = close - p - 1;
+        // Check if content has = or wildcards (definition) vs just name (reference)
+        int has_equals = 0;
+        int has_wildcard_inside = 0;
+        for (const char* c = p + 1; c < close; c++) {
+          if (*c == '=') has_equals = 1;
+          if (*c == '*' || *c == '.' || *c == '?') has_wildcard_inside = 1;
+        }
+        // It's a group definition if it has = or wildcards
+        if (has_equals || has_wildcard_inside) {
+          has_capture_groups = 1;
+        }
+      }
+    }
+
     // Check for both escaped and unescaped wildcards (outside quotes)
     if (!in_quotes && (*p == '.' || *p == '*' || *p == '?')) {
       has_wildcard = 1;
@@ -1198,8 +1871,21 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
     }
   }
 
+  // Initialize defined_groups
+  op->defined_group_count = 0;
 
-  if (has_concat) {
+  if (has_capture_groups) {
+    // Use capture groups parsing
+    op->pattern_type = PATTERN_WILDCARD;
+    if (!parse_concatenated_input_with_captures(search_str, &op->segments, &op->segment_count,
+                                  encoding, op->defined_groups, &op->defined_group_count)) {
+      free(search_str);
+      free(replace_str);
+      return 0;
+    }
+    op->search_bytes = NULL;
+    op->search_len = 0;
+  } else if (has_concat) {
     // Use concatenation parsing (handles both + and wildcards)
     op->pattern_type = PATTERN_WILDCARD;
     if (!parse_concatenated_input(search_str, &op->segments, &op->segment_count,
@@ -1384,7 +2070,24 @@ int main(int argc, char* argv[]) {
   dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
   SetConsoleMode(hOut, dwMode);
 
-  if (argc < 2) {
+  // Check for -d debug flag
+  int debug_mode = 0;
+  int arg_offset = 0;
+  if (argc >= 2 && strcmp(argv[1], "-d") == 0) {
+    debug_mode = 1;
+    arg_offset = 1;
+    fprintf(stderr, COLOR_CYAN "=== DEBUG MODE ===" COLOR_RESET "\n\n");
+
+    // Print command line arguments
+    fprintf(stderr, COLOR_YELLOW "Command line arguments:" COLOR_RESET "\n");
+    fprintf(stderr, "  argc = %d\n", argc);
+    for (int i = 0; i < argc; i++) {
+      fprintf(stderr, "  argv[%d] = '%s'\n", i, argv[i]);
+    }
+    fprintf(stderr, "\n");
+  }
+
+  if (argc < 2 + arg_offset) {
     fprintf(stderr,
             "\n" COLOR_YELLOW "REPLACER " COLOR_YELLOW "v26.0420 - " COLOR_CYAN
             "File content search and replace utility with encoding "
@@ -1574,7 +2277,7 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  const char* file_spec = argv[1];
+  const char* file_spec = argv[1 + arg_offset];
 
   char* input_file = NULL;
   char* output_file = NULL;
@@ -1588,6 +2291,23 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
+  if (debug_mode) {
+    fprintf(stderr, COLOR_YELLOW "File specification:" COLOR_RESET "\n");
+    fprintf(stderr, "  Input file:     %s\n", input_file ? input_file : "(stdin)");
+    fprintf(stderr, "  Output file:    %s\n", output_file ? output_file : "(stdout)");
+    fprintf(stderr, "  Input encoding: %s\n",
+            input_enc == ENCODING_UTF8 ? "UTF-8" :
+            input_enc == ENCODING_WIN1251 ? "WIN-1251" :
+            input_enc == ENCODING_DOS866 ? "DOS-866" :
+            input_enc == ENCODING_KOI8R ? "KOI8-R" : "Unknown");
+    fprintf(stderr, "  Output encoding: %s\n",
+            output_enc == ENCODING_UTF8 ? "UTF-8" :
+            output_enc == ENCODING_WIN1251 ? "WIN-1251" :
+            output_enc == ENCODING_DOS866 ? "DOS-866" :
+            output_enc == ENCODING_KOI8R ? "KOI8-R" : "Unknown");
+    fprintf(stderr, "  Use stdio:      %s\n\n", use_stdio ? "yes" : "no");
+  }
+
   if (!use_stdio && !output_file) {
     output_file = create_output_filename(input_file);
     if (!output_file) {
@@ -1595,9 +2315,12 @@ int main(int argc, char* argv[]) {
       free(input_file);
       return 1;
     }
+    if (debug_mode) {
+      fprintf(stderr, COLOR_YELLOW "Auto-generated output filename:" COLOR_RESET " %s\n\n", output_file);
+    }
   }
 
-  int op_count = argc - 2;
+  int op_count = argc - 2 - arg_offset;
   Operation* operations = NULL;
 
   if (op_count > 0) {
@@ -1610,7 +2333,7 @@ int main(int argc, char* argv[]) {
     }
 
     for (int i = 0; i < op_count; i++) {
-      if (!parse_operation(argv[i + 2], &operations[i], ENCODING_UTF8)) {
+      if (!parse_operation(argv[i + 2 + arg_offset], &operations[i], ENCODING_UTF8)) {
         for (int j = 0; j < i; j++) {
           free_operation(&operations[j]);
         }
@@ -1619,6 +2342,43 @@ int main(int argc, char* argv[]) {
         if (output_file) free(output_file);
         return 1;
       }
+    }
+
+    if (debug_mode) {
+      fprintf(stderr, COLOR_YELLOW "Operations (%d):" COLOR_RESET "\n", op_count);
+      for (int i = 0; i < op_count; i++) {
+        fprintf(stderr, "  [%d] ", i + 1);
+        if (operations[i].pattern_type == PATTERN_LITERAL) {
+          fprintf(stderr, "LITERAL: ");
+          for (size_t j = 0; j < operations[i].search_len && j < 20; j++) {
+            fprintf(stderr, "%02X ", operations[i].search_bytes[j]);
+          }
+          if (operations[i].search_len > 20) fprintf(stderr, "...");
+        } else {
+          fprintf(stderr, "WILDCARD: %d segments", operations[i].segment_count);
+          if (operations[i].defined_group_count > 0) {
+            fprintf(stderr, ", %d named groups (", operations[i].defined_group_count);
+            for (int g = 0; g < operations[i].defined_group_count; g++) {
+              fprintf(stderr, "%s%s", g > 0 ? ", " : "", operations[i].defined_groups[g].name);
+            }
+            fprintf(stderr, ")");
+          }
+        }
+        fprintf(stderr, " -> ");
+        if (operations[i].delete_mode) {
+          fprintf(stderr, "DELETE");
+        } else if (operations[i].has_captures_in_replace) {
+          fprintf(stderr, "REPLACE with captures");
+        } else {
+          fprintf(stderr, "REPLACE: ");
+          for (size_t j = 0; j < operations[i].replace_len && j < 20; j++) {
+            fprintf(stderr, "%02X ", operations[i].replace_bytes[j]);
+          }
+          if (operations[i].replace_len > 20) fprintf(stderr, "...");
+        }
+        fprintf(stderr, "\n");
+      }
+      fprintf(stderr, "\n");
     }
   }
 
@@ -1705,6 +2465,10 @@ int main(int argc, char* argv[]) {
       return 1;
     }
 
+    if (debug_mode) {
+      fprintf(stderr, COLOR_YELLOW "Input file size:" COLOR_RESET " %zu bytes\n\n", buffer_size);
+    }
+
     // Set stdout to binary mode if outputting to stdout
     if (use_stdio) {
       _setmode(_fileno(stdout), _O_BINARY);
@@ -1751,6 +2515,14 @@ int main(int argc, char* argv[]) {
       return 1;
     }
     free(buffer);
+
+    if (debug_mode) {
+      fprintf(stderr, COLOR_YELLOW "Processing results:" COLOR_RESET "\n");
+      fprintf(stderr, "  Total replacements: %d\n", total_replacements);
+      fprintf(stderr, "  Input size:         %zu bytes\n", buffer_size);
+      fprintf(stderr, "  Output size:        %zu bytes\n", result_size);
+      fprintf(stderr, "  Size change:        %+zd bytes\n\n", (ssize_t)result_size - (ssize_t)buffer_size);
+    }
   } else {
     result = buffer;
     result_size = buffer_size;
@@ -1810,6 +2582,10 @@ int main(int argc, char* argv[]) {
   }
   if (input_file) free(input_file);
   if (output_file) free(output_file);
+
+  if (debug_mode) {
+    fprintf(stderr, COLOR_GREEN "=== DEBUG MODE COMPLETE ===" COLOR_RESET "\n");
+  }
 
   return 0;
 }

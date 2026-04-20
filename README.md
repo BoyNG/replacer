@@ -3,13 +3,52 @@
 **File content search and replace utility with encoding conversion**  
 **Утилита поиска и замены содержимого файлов с конвертацией кодировок**
 
-Version 26.0419 by BoyNG (Vyacheslav Burnosov)
+Version 26.0421 by BoyNG (Vyacheslav Burnosov)
 
 ---
 
-## New in 26.0420 / Новое в версии 26.0420
+## Table of Contents / Содержание
+
+- [What's New / Что нового](#whats-new--что-нового)
+  - [New in 26.0421](#new-in-260420--новое-в-версии-260421)
+  - [New in 26.0419](#new-in-260419--новое-в-версии-260419)
+  - [New in 26.0418](#new-in-260418--новое-в-версии-260418)
+- [Description / Описание](#description--описание)
+- [Features / Возможности](#features--возможности)
+- [Usage / Использование](#usage--использование)
+  - [File Specification](#file-specification--формат-файла)
+  - [Operation Format](#operation-format--формат-операций)
+  - [Encodings](#encodings--кодировки)
+  - [Wildcards](#wildcards--подстановочные-символы)
+  - [Capture Groups](#capture-groups--группы-захвата)
+  - [Debug Mode](#debug-mode--режим-отладки)
+  - [Concatenation](#concatenation--конкатенация)
+  - [Quoting Rules](#important-quoting-rules--важно-правила-кавычек)
+- [Examples / Примеры](#examples--примеры)
+  - [Basic Operations](#1-basic-hex-replacement--базовая-hex-замена)
+  - [Text Replacement](#3-text-replacement--текстовая-замена)
+  - [Encoding Conversion](#5-encoding-conversion--конвертация-кодировок)
+  - [Wildcard Patterns](#9-wildcard-patterns--паттерны-с-wildcards)
+  - [Capture Groups Examples](#14-capture-groups-examples--примеры-групп-захвата)
+  - [Practical Use Cases](#15-practical-use-cases--практические-примеры)
+- [Building / Сборка](#building--сборка)
+- [Requirements / Требования](#requirements--требования)
+- [License / Лицензия](#license--лицензия)
+
+---
+
+## What's New / Что нового
+
+## What's New / Что нового
+
+### New in 26.0421 / Новое в версии 26.0421
 
 **English:**
+- **Capture Groups**: Save and reuse matched patterns with `{pattern}` and `{name=pattern}`
+- **Numbered groups**: Up to 9 groups `{pattern}` referenced as `\1`, `\2`, ..., `\9`
+- **Named groups**: Unlimited groups `{name=pattern}` referenced as `{name}` (outside quotes)
+- **Debug mode**: Use `-d` flag to see detailed processing information
+- **Bilingual errors**: All error messages in English and Russian
 - **Single quote syntax**: Use single quotes `'...'` for literals inside double quotes for CMD
 - **Simplified quoting**: `"'pattern':'replacement'"` instead of complex escaping
 - **Capture entire match**: `\0` in replacement captures the entire matched pattern
@@ -18,6 +57,11 @@ Version 26.0419 by BoyNG (Vyacheslav Burnosov)
 - **Multiple operations**: Pass each operation as separate argument
 
 **Русский:**
+- **Группы захвата**: Сохранение и повторное использование найденных паттернов с `{pattern}` и `{name=pattern}`
+- **Нумерованные группы**: До 9 групп `{pattern}` с ссылками `\1`, `\2`, ..., `\9`
+- **Именованные группы**: Неограниченное количество групп `{name=pattern}` с ссылками `{name}` (вне кавычек)
+- **Режим отладки**: Используйте флаг `-d` для просмотра детальной информации об обработке
+- **Билингвальные ошибки**: Все сообщения об ошибках на английском и русском
 - **Синтаксис с одинарными кавычками**: Используйте одинарные кавычки `'...'` для литералов внутри двойных для CMD
 - **Упрощённые кавычки**: `"'паттерн':'замена'"` вместо сложного экранирования
 - **Захват всего вхождения**: `\0` в замене захватывает весь найденный паттерн
@@ -73,7 +117,7 @@ REPLACER — мощная утилита командной строки для 
 - Binary and text search and replace
 - Multiple encoding support: UTF-8, Windows-1251 (CP1251), DOS (CP866), KOI8-R
 - Hex input format: `0xFFAA` or `$FFAA`
-- Text input format: quoted `"text"` or plain text
+- Text input format: quoted `'text'` or plain text
 - Encoding conversion between different code pages
 - Pipeline operations: chain multiple replacements
 - Stdin/stdout support for use in pipes
@@ -84,7 +128,7 @@ REPLACER — мощная утилита командной строки для 
 - Бинарный и текстовый поиск и замена
 - Поддержка множества кодировок: UTF-8, Windows-1251 (CP1251), DOS (CP866), KOI8-R
 - Hex формат ввода: `0xFFAA` или `$FFAA`
-- Текстовый формат: в кавычках `"текст"` или просто текст
+- Текстовый формат: в кавычках `'текст'` или просто текст
 - Конвертация между различными кодовыми страницами
 - Конвейерные операции: цепочка нескольких замен
 - Поддержка stdin/stdout для использования в конвейерах
@@ -130,7 +174,8 @@ replacer [encoding:]<input>[:[encoding][:output]] [operations...]
 - `0xFFAA` or `$FFAA`
 
 **Text / Текст:**
-- `"hello"` or plain text / `"привет"` или просто текст
+- `'hello'` / `'привет'`
+Расположен внутри одиночных кавычек.
 
 ### Encodings / Кодировки
 
@@ -150,7 +195,61 @@ replacer [encoding:]<input>[:[encoding][:output]] [operations...]
 | `\?` | Optional byte (zero or one) / Необязательный байт (ноль или один) |
 
 **Note / Примечание:** Use backslash to escape wildcards. Without backslash they are literal characters.  
-Используйте обратный слэш для wildcards. Без слэша - это литеральные символы.
+Используйте обратный слэш для wildcards если внутри `'текстового'` блока, т.к без слэша - это литеральные символы!
+Вне текстового блока возможно использование без слеша.
+
+### Capture Groups / Группы захвата
+
+**NEW in 26.0421 / НОВОЕ в 26.0421**
+
+| Syntax / Синтаксис | Description / Описание |
+|---------------------|------------------------|
+| `{pattern}` | Numbered capture group (max 9) / Нумерованная группа захвата (максимум 9) |
+| `{name=pattern}` | Named capture group (unlimited) / Именованная группа захвата (неограниченно) |
+| `\0` | Reference entire match / Ссылка на всё совпадение |
+| `\1` to `\9` | Reference numbered groups / Ссылка на нумерованные группы |
+| `{name}` | Reference named group (outside quotes only) / Ссылка на именованную группу (только вне кавычек) |
+
+**Rules / Правила:**
+- Group names: `[a-zA-Z][a-zA-Z0-9_]*`, max 32 chars / Имена групп: `[a-zA-Z][a-zA-Z0-9_]*`, максимум 32 символа
+- `{name}` references work only outside quotes / Ссылки `{name}` работают только вне кавычек
+- `\1-\9` references work everywhere / Ссылки `\1-\9` работают везде
+- Max 9 numbered groups, unlimited named groups / Максимум 9 нумерованных групп, неограниченно именованных
+
+**Examples / Примеры:**
+```cmd
+REM Swap two parts / Поменять местами две части
+replacer.exe "file.txt":- "'['+{*}+'] '+{*}:'\2 (\1)'"
+REM Input: [ERROR] File not found
+REM Output: File not found (ERROR)
+
+REM Named groups / Именованные группы
+replacer.exe "file.txt":- "'Name: '+{name=*}+', Age: '+{age=*}:{age}+' years old, name='+{name}"
+REM Input: Name: John, Age: 30
+REM Output: 30 years old, name=John
+
+REM Multiple references / Множественные ссылки
+replacer.exe "file.txt":- "{word=*}:{word}+{word}+{word}"
+REM Input: test
+REM Output: testtesttest
+```
+
+### Debug Mode / Режим отладки
+
+**NEW in 26.0421 / НОВОЕ в 26.0421**
+
+Use `-d` flag as first argument to see detailed processing information:
+
+```cmd
+replacer.exe -d "file.txt":- "'pattern':'replacement'"
+```
+
+**Shows / Показывает:**
+- Command line arguments / Аргументы командной строки
+- Parsed file specification / Распарсенную спецификацию файла
+- Operations details (pattern type, segments, groups) / Детали операций (тип паттерна, сегменты, группы)
+- Input file size / Размер входного файла
+- Processing statistics (replacements, size changes) / Статистику обработки (замены, изменения размера)
 
 ### Concatenation / Конкатенация
 
@@ -218,7 +317,7 @@ replacer.exe file.txt "\"Version: \"+\1+\".\"+\2:\"v\1.\2\""
 New syntax is much simpler:
 ```cmd
 REM NEW (simple, clear)
-replacer.exe "file.txt":- "'Version: '+*+'.'+*:'v\1.\2'"
+replacer.exe "file.txt":- "'Version: '+{*}+'.'+{*}:'v\1.\2'"
 ```
 
 **For Git Bash (Unix shell on Windows) / Для Git Bash (Unix shell на Windows):**
@@ -258,11 +357,11 @@ replacer file.bin:output.bin 0xAA:0xBB
 
 ### 3. Text replacement / Текстовая замена
 
-```bash
-replacer file.txt "hello":"world"
+```cmd
+replacer.exe "file.txt":- "'hello':'world'"
 ```
-**English:** Replace text "hello" with "world" in `file.txt`, output to `file_OUT.txt`  
-**Русский:** Заменить текст "hello" на "world" в `file.txt`, результат в `file_OUT.txt`
+**English:** Replace text "hello" with "world" in `file.txt`, output to stdout  
+**Русский:** Заменить текст "hello" на "world" в `file.txt`, вывод в stdout
 
 ```bash
 replacer file.txt hello:world
@@ -270,16 +369,16 @@ replacer file.txt hello:world
 **English:** Same as above but without quotes (plain text format)  
 **Русский:** То же самое, но без кавычек (формат простого текста)
 
-```bash
-replacer file.txt "old text":"new text" "foo":"bar"
+```cmd
+replacer.exe "file.txt":- "'old text':'new text'" "'foo':'bar'"
 ```
 **English:** Multiple text replacements in one pass  
 **Русский:** Множественные текстовые замены за один проход
 
 ### 4. Delete operation / Операция удаления
 
-```bash
-replacer file.txt "hello":
+```cmd
+replacer.exe "file.txt":- "'hello':'"
 ```
 **English:** Delete all occurrences of "hello" (replace with empty string)  
 **Русский:** Удалить все вхождения "hello" (заменить на пустую строку)
@@ -312,20 +411,20 @@ replacer koi:file.txt:utf
 
 ### 6. Text replacement with specific encoding / Текстовая замена с указанием кодировки
 
-```bash
-replacer win:file.txt:utf "тест":"test"
+```cmd
+replacer.exe "win:file.txt:utf":- "'тест':'test'"
 ```
 **English:** Read file as Windows-1251, replace Russian "тест" with "test", output as UTF-8  
 **Русский:** Читать файл как Windows-1251, заменить русское "тест" на "test", вывод в UTF-8
 
-```bash
-replacer file.txt "привет":"hello":win
+```cmd
+replacer.exe "file.txt":- "'привет':'hello':win"
 ```
 **English:** Replace text using Windows-1251 encoding for this specific operation  
 **Русский:** Заменить текст используя кодировку Windows-1251 для этой конкретной операции
 
-```bash
-replacer dos:file.txt "текст":"text":dos "hello":"мир":dos
+```cmd
+replacer.exe "dos:file.txt":- "'текст':'text':dos" "'hello':'мир':dos"
 ```
 **English:** Read DOS file, perform multiple replacements with DOS encoding  
 **Русский:** Читать DOS файл, выполнить множественные замены с кодировкой DOS
@@ -358,20 +457,27 @@ replacer file.txt:-:dos "hello":"мир"
 
 ### 8. Pipeline operations / Конвейерные операции
 
-```bash
-replacer file.txt "old":"new" "foo":"bar" "test":
+```cmd
+replacer.exe "file.txt":- "'old':'new'" "foo:bar" "'test':"
 ```
 **English:** Chain multiple operations: replace "old" with "new", "foo" with "bar", delete "test"  
-**Русский:** Цепочка операций: заменить "old" на "new", "foo" на "bar", удалить "test"
+**Русский:** Цепочка операций: заменить "old" на "new", "foo" на "bar", удалить "test". Допускается опускать одиночные кавычки текста.
+
+```cmd
+echo color colour colorifer | replacer.exe -:- "{'co'+*}+'r':\t\1'bok'" "lobok:t"
+>        cot     coloubok        cotifer
+```
+**English:** Sequential text replacements (note: operations are applied in order)  
+**Русский:** Последовательные текстовые замены (внимание: операции применяются по порядку)
 
 ```bash
-replacer file.bin 0xAA:0xBB 0xBB:0xCC 0xCC:0xDD
+replacer file.bin 0xAA0000:0x00BB00 0xBBAA00:0x00 0x0000CC:0xAAAAAA
 ```
 **English:** Sequential hex replacements (note: operations are applied in order)  
 **Русский:** Последовательные hex замены (внимание: операции применяются по порядку)
 
-```bash
-replacer win:file.txt:utf "тест":"test":win "hello":"привет":utf
+```cmd
+replacer.exe "win:file.txt:utf":- "'тест':'test':win" "'hello':'привет':utf"
 ```
 **English:** Mixed encoding operations: first operation uses Windows-1251, second uses UTF-8  
 **Русский:** Смешанные операции с кодировками: первая использует Windows-1251, вторая UTF-8
@@ -570,10 +676,9 @@ replacer dos:-:utf < dos_file.txt > utf_file.txt
 ### 12. Mixed operations / Смешанные операции
 
 ```bash
-replacer file.bin:result.bin 0xFF: "test":"demo" $AA:$BB
-```
-**English:** Delete all `0xFF` bytes, replace text "test" with "demo", replace `0xAA` with `0xBB`  
-**Русский:** Удалить все байты `0xFF`, заменить текст "test" на "demo", заменить `0xAA` на `0xBB`
+echo test123  line 1  line 2  line 3  | replacer -:- 0x2020:\n "test":"demo" $20:\t# "\n:'.\n'"  "'.\n\r.':"
+```  
+**Русский:** Заменяем 2 пробела на перенос строки, заменяем текст "test" на "demo", заменить `$20`(пробел) на табуляцию и #, перед всем концами строки поставить точку. Заменяем все точки на одну, которые вначале строки после строки с точкой.
 
 ```bash
 replacer win:file.txt:utf:output.txt "старый":"новый":win "test":"тест":utf
@@ -608,7 +713,7 @@ replacer firmware.bin 0x00FF00FF:0xFF00FF00
 **Русский:** Пропатчить бинарный файл прошивки
 
 ```bash
-type template.html | replacer - "{{NAME}}":"John" "{{DATE}}":"2026-04-17" > output.html
+type template.html | replacer - "'{{NAME}}':'John'" "'{{DATE}}':'2026-04-17'" > output.html
 ```
 **English:** Simple template engine using stdin/stdout  
 **Русский:** Простой шаблонизатор используя stdin/stdout
@@ -661,6 +766,139 @@ replacer json.txt "\"token\""+\?+":"+\?+"\""+\*+"\"":"\"token\": \"***\""
 **English:** Redact JSON tokens with flexible spacing: `"token":"value"` or `"token" : "value"`  
 **Русский:** Скрыть JSON токены с гибкими пробелами: `"token":"value"` или `"token" : "value"`
 
+### 14. Capture Groups Examples / Примеры групп захвата
+
+**NEW in 26.0421 / НОВОЕ в 26.0421**
+
+```cmd
+REM Wrap matched text in brackets
+replacer.exe "file.txt":- "'error':'[\0]'"
+```
+**English:** Input: `error` → Output: `[error]`  
+**Русский:** Вход: `error` → Выход: `[error]`
+
+```cmd
+REM Duplicate matched text
+replacer.exe "file.txt":- "'word':'\0 and \0'"
+```
+**English:** Input: `test` → Output: `test and test`  
+**Русский:** Вход: `test` → Выход: `test and test`
+
+```cmd
+REM Swap log level and message
+replacer.exe "log.txt":- "'['+{level=*}+'] '+{msg=*}:{msg}+' ['+{level}+']'"
+```
+**English:** Input: `[ERROR] File not found` → Output: `File not found [ERROR]`  
+**Русский:** Вход: `[ERROR] File not found` → Выход: `File not found [ERROR]`
+
+```cmd
+REM Extract and reformat version numbers
+replacer.exe "file.txt":- "'Version '+{major=*}+'.'+{minor=*}+'.'+{patch=*}:'v'+{major}+'.'+{minor}+'.'+{patch}"
+```
+**English:** Input: `Version 1.2.3` → Output: `v1.2.3`  
+**Русский:** Вход: `Version 1.2.3` → Выход: `v1.2.3`
+
+```cmd
+REM Reorder date format (DD.MM.YYYY to YYYY-MM-DD)
+replacer.exe "dates.txt":- "{day=*}+'.'+{month=*}+'.'+{year=*}:{year}+'-'+{month}+'-'+{day}"
+```
+**English:** Input: `25.12.2025` → Output: `2025-12-25`  
+**Русский:** Вход: `25.12.2025` → Выход: `2025-12-25`
+
+```cmd
+REM Extract email username
+replacer.exe "emails.txt":- "{user=*}+'@'+*:{user}"
+```
+**English:** Input: `john@example.com` → Output: `john`  
+**Русский:** Вход: `john@example.com` → Выход: `john`
+
+```cmd
+REM Anonymize phone numbers but keep format
+replacer.exe "contacts.txt":- "'+7 ('+{code=*}+') '+{*}+'-'+{*}+'-'+{*}:'+7 ('+{code}+') XXX-XX-XX'"
+```
+**English:** Input: `+7 (495) 123-45-67` → Output: `+7 (495) XXX-XX-XX`  
+**Русский:** Вход: `+7 (495) 123-45-67` → Выход: `+7 (495) XXX-XX-XX`
+
+```cmd
+REM Reformat function calls: func(arg) to arg.func()
+replacer.exe "code.txt":- "{fn=*}+'('+{arg=*}+')':'{arg}+'.'+{fn}+'()'"
+```
+**English:** Input: `print(message)` → Output: `message.print()`  
+**Русский:** Вход: `print(message)` → Выход: `message.print()`
+
+```cmd
+REM Triple the matched word
+replacer.exe "file.txt":- "{w=*}:{w}+{w}+{w}"
+```
+**English:** Input: `test` → Output: `testtesttest`  
+**Русский:** Вход: `test` → Выход: `testtesttest`
+
+### 15. Practical Use Cases / Практические примеры
+
+**Log file processing / Обработка лог-файлов:**
+```cmd
+REM Extract timestamps from logs
+replacer.exe "app.log":- "'['+{time=*}+'] '+{level=*}+': '+{msg=*}:{time}+' | '+{msg}"
+REM Input: [2026-04-20 10:30:15] ERROR: Connection failed
+REM Output: 2026-04-20 10:30:15 | Connection failed
+```
+
+**Configuration file updates / Обновление конфигурационных файлов:**
+```cmd
+REM Update port numbers while preserving parameter names
+replacer.exe "config.ini":- "{param=*}+'='+*:{param}+'=8080'"
+REM Input: server_port=3000
+REM Output: server_port=8080
+```
+
+**Source code refactoring / Рефакторинг исходного кода:**
+```cmd
+REM Convert old-style to new-style function calls
+replacer.exe "legacy.js":- "'oldFunc('+{args=*}+')':'newFunc('+{args}+')'"
+REM Input: oldFunc(x, y, z)
+REM Output: newFunc(x, y, z)
+```
+
+**Data anonymization / Анонимизация данных:**
+```cmd
+REM Mask credit card numbers but keep last 4 digits
+replacer.exe "transactions.txt":- "*+'-'+*+'-'+*+'-'+{last=*}:'****-****-****-'+{last}"
+REM Input: 1234-5678-9012-3456
+REM Output: ****-****-****-3456
+```
+
+**URL manipulation / Манипуляция URL:**
+```cmd
+REM Change protocol from http to https
+replacer.exe "links.txt":- "'http://'+{domain=*}:'https://'+{domain}"
+REM Input: http://example.com/page
+REM Output: https://example.com/page
+```
+
+**CSV/TSV processing / Обработка CSV/TSV:**
+```cmd
+REM Swap first and last columns in CSV
+replacer.exe "data.csv":- "{first=*}+','+{middle=*}+','+{last=*}:{last}+','+{middle}+','+{first}"
+REM Input: John,Doe,30
+REM Output: 30,Doe,John
+```
+
+**HTML/XML tag manipulation / Манипуляция HTML/XML тегами:**
+```cmd
+REM Extract content from tags
+replacer.exe "page.html":- "'<title>'+{content=*}+'</title>':{content}"
+REM Input: <title>My Page</title>
+REM Output: My Page
+```
+
+**Batch renaming patterns / Паттерны пакетного переименования:**
+```cmd
+REM Generate rename commands from file list
+replacer.exe "files.txt":- "{name=*}+'.txt':'ren \"'+{name}+'.txt\" \"new_'+{name}+'.txt\"'"
+REM Input: document.txt
+REM Output: ren "document.txt" "new_document.txt"
+```
+
 ---
 
 ### CLI help information / Вывод помощи в консоли
@@ -711,4 +949,4 @@ Free to use and modify.
 
 **BoyNG (Vyacheslav Burnosov)**
 
-Version / Версия: 26.0420
+Version / Версия: 26.0421

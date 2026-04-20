@@ -4,31 +4,74 @@
 
 ### 1. Capture groups / Группы захвата
 **Priority: High / Приоритет: Высокий**
-**Status: PARTIALLY COMPLETED / Статус: ЧАСТИЧНО ЗАВЕРШЕНО**
+**Status: COMPLETED / Статус: ЗАВЕРШЕНО**
 
 ```bash
 # \0 for entire match (COMPLETED)
 replacer.exe "file.txt":- "'error':'\0 found'"
 replacer.exe "file.txt":- "'Version: '+*:'Found: \0'"
 
-# \1, \2, etc. for numbered captures (TODO)
-replacer file.txt "Version: "+\1+"."+\2:"Version: \2.\1"
+# \1-\9 for numbered captures (COMPLETED)
+replacer.exe "file.txt":- "'['+{*}+'] '+{*}:'\2 (\1)'"
+# Input: [ERROR] File not found
+# Output: File not found (ERROR)
+
+# Named captures with {name=pattern} (COMPLETED)
+replacer.exe "file.txt":- "'Name: '+{name=*}+', Age: '+{age=*}:{age}+' years, name='+{name}"
+# Input: Name: John, Age: 30
+# Output: 30 years, name=John
 ```
+
 **English:** 
-- `\0` captures entire match (DONE)
-- `\1`, `\2`, etc. for numbered captures (TODO)
-- Swap version numbers or reuse captured parts
+- `\0` captures entire match (COMPLETED)
+- `\1-\9` for numbered captures (COMPLETED - max 9 groups)
+- `{name=pattern}` for named captures (COMPLETED - unlimited)
+- `{name}` references work outside quotes only
+- Swap parts, reuse captured segments, mix numbered and named groups
 
 **Русский:**
-- `\0` захватывает всё вхождение (ГОТОВО)
-- `\1`, `\2` и т.д. для нумерованных захватов (TODO)
-- Переставить местами версию или переиспользовать захваченные части
+- `\0` захватывает всё вхождение (ЗАВЕРШЕНО)
+- `\1-\9` для нумерованных захватов (ЗАВЕРШЕНО - максимум 9 групп)
+- `{name=pattern}` для именованных захватов (ЗАВЕРШЕНО - неограниченно)
+- Ссылки `{name}` работают только вне кавычек
+- Переставить части, переиспользовать захваченные сегменты, смешивать нумерованные и именованные группы
 
 **Implementation notes:**
 - `\0` for entire match: COMPLETED in version 26.0420
-- Add numbered capture syntax: `\1`, `\2`, etc. (TODO)
-- Store captured segments during wildcard matching
-- Substitute captured values in replacement string
+- Numbered captures `\1-\9`: COMPLETED in version 26.0421
+- Named captures `{name=pattern}`: COMPLETED in version 26.0421
+- Syntax uses `=` instead of `:` to avoid conflict with search:replace separator
+- Bilingual error messages for all capture group errors
+- Debug mode `-d` shows capture group information
+
+---
+
+### 1a. Debug mode / Режим отладки
+**Priority: High / Приоритет: Высокий**
+**Status: COMPLETED / Статус: ЗАВЕРШЕНО**
+
+```bash
+replacer.exe -d file.txt:- "'pattern':'replacement'"
+```
+
+**English:**
+- Shows command line arguments (argc, argv)
+- Shows parsed file specification (files, encodings)
+- Shows operations details (pattern type, segments, groups)
+- Shows input file size
+- Shows processing statistics (replacements, size changes)
+
+**Русский:**
+- Показывает аргументы командной строки (argc, argv)
+- Показывает распарсенную спецификацию файла (файлы, кодировки)
+- Показывает детали операций (тип паттерна, сегменты, группы)
+- Показывает размер входного файла
+- Показывает статистику обработки (замены, изменения размера)
+
+**Implementation notes:**
+- `-d` flag must be first argument
+- Colorized output for better readability
+- Completed in version 26.0421
 
 ---
 
@@ -526,5 +569,5 @@ replacer.exe "file.txt":- "'colo\*\x72':'change color'"
 
 ---
 
-**Version:** 26.0420  
+**Version:** 26.0421  
 **Last updated:** 2026-04-20
