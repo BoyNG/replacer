@@ -3,7 +3,41 @@
 **File content search and replace utility with encoding conversion**  
 **Утилита поиска и замены содержимого файлов с конвертацией кодировок**
 
-Version 26.0418 by BoyNG (Vyacheslav Burnosov)
+Version 26.0419 by BoyNG (Vyacheslav Burnosov)
+
+---
+
+## New in 26.0420 / Новое в версии 26.0420
+
+**English:**
+- **Single quote syntax**: Use single quotes `'...'` for literals inside double quotes for CMD
+- **Simplified quoting**: `"'pattern':'replacement'"` instead of complex escaping
+- **Capture entire match**: `\0` in replacement captures the entire matched pattern
+- **Escape sequences in replacements**: `\n`, `\r`, `\t`, `\\` work in replacement strings
+- **Quote-aware wildcards**: Wildcards inside quotes are literal, outside quotes are patterns
+- **Multiple operations**: Pass each operation as separate argument
+
+**Русский:**
+- **Синтаксис с одинарными кавычками**: Используйте одинарные кавычки `'...'` для литералов внутри двойных для CMD
+- **Упрощённые кавычки**: `"'паттерн':'замена'"` вместо сложного экранирования
+- **Захват всего вхождения**: `\0` в замене захватывает весь найденный паттерн
+- **Escape последовательности в заменах**: `\n`, `\r`, `\t`, `\\` работают в строках замены
+- **Wildcards с учётом кавычек**: Wildcards внутри кавычек - литеральные, снаружи - паттерны
+- **Множественные операции**: Передавайте каждую операцию как отдельный аргумент
+
+## New in 26.0419 / Новое в версии 26.0419
+
+**English:**
+- **Escape sequences**: Support for `\n`, `\r`, `\t`, `\\`, `\"`, `\xHH` in text strings
+- **Wildcards in text**: Use `\.`, `\*`, `\?` directly inside text without `+` concatenation
+- **Flexible syntax**: Both `"test\.end"` and `"test"+\.+"end"` work
+- **Hex escapes**: Use `\xHH` for hex bytes (e.g., `\x0A`, `\xFF`)
+
+**Русский:**
+- **Escape последовательности**: Поддержка `\n`, `\r`, `\t`, `\\`, `\"`, `\xHH` в текстовых строках
+- **Wildcards в тексте**: Используйте `\.`, `\*`, `\?` прямо внутри текста без конкатенации `+`
+- **Гибкий синтаксис**: Работают оба варианты `"test\.end"` и `"test"+\.+"end"`
+- **Hex escape**: Используйте `\xHH` для hex байтов (например, `\x0A`, `\xFF`)
 
 ---
 
@@ -132,20 +166,66 @@ replacer [encoding:]<input>[:[encoding][:output]] [operations...]
 
 ### Important: Quoting Rules / Важно: Правила кавычек
 
+**CRITICAL: New Syntax in 26.0420 / КРИТИЧНО: Новый синтаксис в 26.0420**
+
 **For Windows CMD / Для Windows CMD:**
 ```cmd
-replacer file.txt "colo"+\?+"r":"result"
-replacer file.txt ?:X
+REM Use double quotes outside, single quotes inside for literals
+replacer.exe "file.txt":- "'pattern':'replacement'"
+
+REM Wildcards work ONLY outside single quotes
+replacer.exe "file.txt":- "'Version: '+*:'found'"
+
+REM Wildcards inside single quotes are LITERAL
+replacer.exe "file.txt":- "'file*.txt':'found'"
+
+REM Multiple operations as separate arguments
+replacer.exe "file.txt":- "'old':'new'" "'test':'demo'"
+
+REM Capture entire match with \0
+replacer.exe "file.txt":- "'error':'[\0]'"
+
+REM Escape sequences in replacements
+replacer.exe "file.txt":- "'line':'text\n'" "'tab':'\t\0\t'"
 ```
-Wildcards require backslash escape: `\?`, `\.`, `\*`. Without backslash they are literal characters.  
-Text with spaces must be in quotes: `"text with spaces"`.  
-Wildcards с обратным слэшем: `\?`, `\.`, `\*`. Без слэша - литеральные символы.  
-Текст с пробелами должен быть в кавычках: `"текст с пробелами"`.
+
+**English:**
+- **Double quotes outside** `"..."` - required by CMD to group the argument
+- **Single quotes inside** `'...'` - mark literal text (not wildcards)
+- **Wildcards outside quotes** - `*`, `.`, `?` work as patterns
+- **Wildcards inside quotes** - treated as literal characters
+- **Spaces in replacements** - work naturally with this syntax
+- **`\0` in replacement** - captures entire matched pattern
+- **Escape sequences** - `\n`, `\r`, `\t`, `\\` work in replacements
+
+**Русский:**
+- **Двойные кавычки снаружи** `"..."` - требуются CMD для группировки аргумента
+- **Одинарные кавычки внутри** `'...'` - обозначают литеральный текст (не wildcards)
+- **Wildcards вне кавычек** - `*`, `.`, `?` работают как паттерны
+- **Wildcards внутри кавычек** - обрабатываются как литеральные символы
+- **Пробелы в заменах** - работают естественно с этим синтаксисом
+- **`\0` в замене** - захватывает весь найденный паттерн
+- **Escape последовательности** - `\n`, `\r`, `\t`, `\\` работают в заменах
+
+**Why this syntax? / Почему такой синтаксис?**
+
+Old syntax required complex escaping:
+```cmd
+REM OLD (complex, error-prone)
+replacer.exe file.txt "\"Version: \"+\1+\".\"+\2:\"v\1.\2\""
+```
+
+New syntax is much simpler:
+```cmd
+REM NEW (simple, clear)
+replacer.exe "file.txt":- "'Version: '+*+'.'+*:'v\1.\2'"
+```
 
 **For Git Bash (Unix shell on Windows) / Для Git Bash (Unix shell на Windows):**
 ```bash
-replacer file.txt 'colo+\?+r:result'
-replacer file.txt '?:X'
+# Still use single quotes to protect from bash
+replacer file.txt 'pattern:replacement'
+replacer file.txt "'pattern':'replacement'"
 ```
 Use single quotes to protect the entire argument from bash processing.  
 Используйте одинарные кавычки для защиты всего аргумента от обработки bash.
@@ -298,29 +378,37 @@ replacer win:file.txt:utf "тест":"test":win "hello":"привет":utf
 
 ### 9. Wildcard patterns / Паттерны с wildcards
 
-```bash
-replacer test.html "<title>"+\*+"</title>":"<title>New Title</title>"
-```
-**English:** Match anything between `<title>` and `</title>` tags using `\*` wildcard  
-**Русский:** Найти что угодно между тегами `<title>` и `</title>` используя wildcard `\*`
+**NEW SYNTAX (26.0420):**
 
-```bash
-replacer test.bin 0xAA+\.+0xBB:0xFF
+```cmd
+replacer.exe "test.html":- "'<title>'+*+'</title>':'<title>New</title>'"
 ```
-**English:** Match 0xAA, any single byte (`\.`), then 0xBB, replace with 0xFF  
-**Русский:** Найти 0xAA, любой один байт (`\.`), затем 0xBB, заменить на 0xFF
+**English:** Match anything between tags using `*` wildcard (outside quotes)  
+**Русский:** Найти что угодно между тегами используя wildcard `*` (вне кавычек)
 
-```bash
-replacer test.txt "colo"+\?+"r":"COLOR"
+```cmd
+replacer.exe "test.bin":- "0xAA+.+0xBB:0xFF"
 ```
-**English:** Match "color" or "colour" using optional byte wildcard `\?`  
-**Русский:** Найти "color" или "colour" используя wildcard необязательного байта `\?`
+**English:** Match 0xAA, any single byte (`.`), then 0xBB, replace with 0xFF  
+**Русский:** Найти 0xAA, любой один байт (`.`), затем 0xBB, заменить на 0xFF
 
-```bash
-replacer test.txt ?:X
+```cmd
+replacer.exe "test.txt":- "'colo'+?+'r':'COLOR'"
 ```
-**English:** Replace literal `?` character with `X` (no backslash = literal)  
-**Русский:** Заменить литеральный символ `?` на `X` (без слэша = литеральный)
+**English:** Match "color" or "colour" using optional byte wildcard `?`  
+**Русский:** Найти "color" или "colour" используя wildcard необязательного байта `?`
+
+```cmd
+replacer.exe "test.txt":- "'file*.txt':'found'"
+```
+**English:** Match literal `file*.txt` (wildcards inside quotes are literal)  
+**Русский:** Найти литеральный `file*.txt` (wildcards внутри кавычек - литеральные)
+
+```cmd
+replacer.exe "test.txt":- "'file'+*+'.txt':'found'"
+```
+**English:** Match `file` + any chars + `.txt` (wildcards outside quotes are patterns)  
+**Русский:** Найти `file` + любые символы + `.txt` (wildcards вне кавычек - паттерны)
 
 ```bash
 replacer test.txt "test"+0x0D0A:"replaced"+0x0A
@@ -376,7 +464,66 @@ replacer html.txt "<"+\*+">":
 **English:** Remove all HTML tags (match < + any chars + >, replace with empty)  
 **Русский:** Удалить все HTML теги (найти < + любые символы + >, заменить на пустоту)
 
-### 10. Stdin/stdout mode / Режим stdin/stdout
+### 10. Capture and escape sequences / Захват и escape последовательности
+
+**NEW SYNTAX (26.0420):**
+
+```cmd
+replacer.exe "file.txt":- "'error':'[\0]'"
+```
+**English:** Capture entire match with `\0` - outputs `[error]`  
+**Русский:** Захватить всё вхождение с `\0` - выведет `[error]`
+
+```cmd
+replacer.exe "file.txt":- "'word':'\0 and \0'"
+```
+**English:** Duplicate matched text - outputs `word and word`  
+**Русский:** Дублировать найденный текст - выведет `word and word`
+
+```cmd
+replacer.exe "file.txt":- "'Version: '+*:'Found: \0'"
+```
+**English:** Capture wildcard match - `Version: 1.2` becomes `Found: Version: 1.2`  
+**Русский:** Захватить wildcard совпадение - `Version: 1.2` станет `Found: Version: 1.2`
+
+```cmd
+replacer.exe "file.txt":- "'line':'text\n'"
+```
+**English:** Add newline using `\n` escape sequence in replacement  
+**Русский:** Добавить перевод строки используя escape последовательность `\n` в замене
+
+```cmd
+replacer.exe "file.txt":- "'text':'\t\0\t'"
+```
+**English:** Wrap match in tabs using `\t` escape  
+**Русский:** Обернуть совпадение в табуляции используя `\t` escape
+
+```cmd
+replacer.exe "file.txt":- "'colo\*\x72':'change color'"
+```
+**English:** Hex escape `\xHH` in search pattern  
+**Русский:** Hex escape `\xHH` в паттерне поиска
+
+```cmd
+replacer.exe "file.txt":- "'path':'C:\\new'"
+```
+**English:** Backslash escape `\\` in replacement  
+**Русский:** Escape обратного слэша `\\` в замене
+
+**Supported escape sequences in replacements / Поддерживаемые escape последовательности в заменах:**
+- `\0` → entire matched pattern / весь найденный паттерн
+- `\n` → newline (0x0A)
+- `\r` → carriage return (0x0D)
+- `\t` → tab (0x09)
+- `\\` → backslash (0x5C)
+- `\xHH` → hex byte (e.g., `\x0A`, `\xFF`)
+
+**Wildcards (outside quotes only) / Wildcards (только вне кавычек):**
+- `*` → zero or more bytes / ноль или более байтов
+- `.` → any single byte / любой один байт
+- `?` → optional byte / необязательный байт
+
+### 11. Stdin/stdout mode / Режим stdin/stdout
 
 ```bash
 replacer - 0xAA:0xBB < input.bin > output.bin
@@ -420,7 +567,7 @@ replacer dos:-:utf < dos_file.txt > utf_file.txt
 **English:** Convert DOS (CP866) file to UTF-8 using stdin/stdout  
 **Русский:** Конвертировать DOS (CP866) файл в UTF-8 используя stdin/stdout
 
-### 11. Mixed operations / Смешанные операции
+### 12. Mixed operations / Смешанные операции
 
 ```bash
 replacer file.bin:result.bin 0xFF: "test":"demo" $AA:$BB
@@ -440,7 +587,7 @@ replacer file.txt:- 0x0D0A:0x0A
 **English:** Convert Windows line endings (CRLF) to Unix (LF) and output to stdout  
 **Русский:** Конвертировать Windows окончания строк (CRLF) в Unix (LF) и вывести в stdout
 
-### 12. Practical use cases / Практические примеры использования
+### 13. Practical use cases / Практические примеры использования
 
 ```bash
 replacer config.ini "localhost":"192.168.1.100"
@@ -564,4 +711,4 @@ Free to use and modify.
 
 **BoyNG (Vyacheslav Burnosov)**
 
-Version / Версия: 26.0418
+Version / Версия: 26.0420
