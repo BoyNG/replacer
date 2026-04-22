@@ -68,7 +68,7 @@ Version 26.0422 by BoyNG (Vyacheslav Burnosov)
 - **Single quote syntax**: Use single quotes `'...'` for literals inside double quotes for CMD
 - **Simplified quoting**: `"'pattern':'replacement'"` instead of complex escaping
 - **Capture entire match**: `\0` in replacement captures the entire matched pattern
-- **Escape sequences in replacements**: `\n`, `\r`, `\t`, `\\` work in replacement strings
+- **Escape sequences in replacements**: `\n`, `\r`, `\t`, `\\`, `\"`, `\'` work in replacement strings
 - **Quote-aware wildcards**: Wildcards inside quotes are literal, outside quotes are patterns
 - **Multiple operations**: Pass each operation as separate argument
 
@@ -88,7 +88,7 @@ Version 26.0422 by BoyNG (Vyacheslav Burnosov)
 ## New in 26.0419 / Новое в версии 26.0419
 
 **English:**
-- **Escape sequences**: Support for `\n`, `\r`, `\t`, `\\`, `\"`, `\xHH` in text strings
+- **Escape sequences**: Support for `\n`, `\r`, `\t`, `\\`, `\"`, `\'`, `\xHH` in text strings
 - **Wildcards in text**: Use `\.`, `\*`, `\?` directly inside text without `+` concatenation
 - **Flexible syntax**: Both `"test\.end"` and `"test"+\.+"end"` work
 - **Hex escapes**: Use `\xHH` for hex bytes (e.g., `\x0A`, `\xFF`)

@@ -438,6 +438,7 @@ replacer.exe "file.txt":- "'line1\nline2':'single'"    # \ escape
 - `\t` → 0x09 (tab)
 - `\\` → 0x5C (backslash)
 - `\"` → 0x22 (double quote)
+- `\'` → 0x27 (single quote)
 - `\xHH` → hex byte (e.g., `\x0A`, `\xFF`)
 - `\.` → wildcard: any single byte
 - `\*` → wildcard: zero or more bytes

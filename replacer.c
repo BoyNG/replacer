@@ -256,6 +256,10 @@ char* process_escape_sequences(const char* text, int* has_wildcards) {
           result[out_pos++] = '"';
           i += 2;
           break;
+        case '\'':
+          result[out_pos++] = '\'';
+          i += 2;
+          break;
         case 'x':
           // Hex escape: \xHH
           if (i + 3 < len && isxdigit(text[i + 2]) && isxdigit(text[i + 3])) {
