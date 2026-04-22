@@ -77,17 +77,23 @@ replacer.exe -d file.txt:- "'pattern':'replacement'"
 
 ### 2. Case-insensitive search / Поиск без учёта регистра
 **Priority: High / Приоритет: Высокий**
+**Status: COMPLETED / Статус: ЗАВЕРШЕНО**
 
 ```bash
-replacer file.txt /i "hello":"HELLO"
+replacer file.txt "'hello':'HELLO'/i"
 ```
 **English:** Find hello, Hello, HELLO, hElLo - replace with HELLO (flag /i ignores case)  
 **Русский:** Найти hello, Hello, HELLO, hElLo - заменить на HELLO (флаг /i игнорирует регистр)
 
 **Implementation notes:**
-- Add `/i` flag before search pattern
-- Convert both search and buffer to lowercase for comparison
-- Keep original case in non-matched parts
+- Add `/i` flag at end of operation string (after encoding or replacement)
+- Modified `match_pattern()` to accept `ignore_case` parameter
+- Modified `match_pattern_with_captures()` to accept `ignore_case` parameter
+- Use `tolower()` for byte-by-byte comparison when flag is set
+- Works with both literal patterns and wildcard patterns
+- Works with capture groups
+- Debug mode shows `[/i case-insensitive]` flag
+- Completed in version 26.0422
 
 ---
 
@@ -569,5 +575,5 @@ replacer.exe "file.txt":- "'colo\*\x72':'change color'"
 
 ---
 
-**Version:** 26.0421  
-**Last updated:** 2026-04-20
+**Version:** 26.0422  
+**Last updated:** 2026-04-22

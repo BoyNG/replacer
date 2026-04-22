@@ -3,14 +3,15 @@
 **File content search and replace utility with encoding conversion**  
 **Утилита поиска и замены содержимого файлов с конвертацией кодировок**
 
-Version 26.0421 by BoyNG (Vyacheslav Burnosov)
+Version 26.0422 by BoyNG (Vyacheslav Burnosov)
 
 ---
 
 ## Table of Contents / Содержание
 
 - [What's New / Что нового](#whats-new--что-нового)
-  - [New in 26.0421](#new-in-260420--новое-в-версии-260421)
+  - [New in 26.0422](#new-in-260422--новое-в-версии-260422)
+  - [New in 26.0421](#new-in-260421--новое-в-версии-260421)
   - [New in 26.0419](#new-in-260419--новое-в-версии-260419)
   - [New in 26.0418](#new-in-260418--новое-в-версии-260418)
 - [Description / Описание](#description--описание)
@@ -22,6 +23,7 @@ Version 26.0421 by BoyNG (Vyacheslav Burnosov)
   - [Wildcards](#wildcards--подстановочные-символы)
   - [Capture Groups](#capture-groups--группы-захвата)
   - [Debug Mode](#debug-mode--режим-отладки)
+  - [Case-Insensitive Search](#case-insensitive-search--поиск-без-учёта-регистра)
   - [Concatenation](#concatenation--конкатенация)
   - [Quoting Rules](#important-quoting-rules--важно-правила-кавычек)
 - [Examples / Примеры](#examples--примеры)
@@ -40,6 +42,20 @@ Version 26.0421 by BoyNG (Vyacheslav Burnosov)
 ## What's New / Что нового
 
 ## What's New / Что нового
+
+### New in 26.0422 / Новое в версии 26.0422
+
+**English:**
+- **Case-insensitive search**: Use `/i` flag at end of operation to ignore case
+- **Flexible flag placement**: Works with or without encoding: `'hello':'HELLO'/i` or `'hello':'HELLO':utf/i`
+- **Works with all patterns**: Case-insensitive matching for literal patterns, wildcards, and capture groups
+- **Debug support**: Shows `[/i case-insensitive]` flag in debug mode output
+
+**Русский:**
+- **Поиск без учёта регистра**: Используйте флаг `/i` в конце операции для игнорирования регистра
+- **Гибкое размещение флага**: Работает с кодировкой и без: `'hello':'HELLO'/i` или `'hello':'HELLO':utf/i` или даже `'hello':HELLO/i`
+- **Работает со всеми паттернами**: Поиск без учёта регистра для литеральных паттернов, wildcards и групп захвата
+- **Поддержка отладки**: Показывает флаг `[/i case-insensitive]` в режиме отладки
 
 ### New in 26.0421 / Новое в версии 26.0421
 
@@ -250,6 +266,42 @@ replacer.exe -d "file.txt":- "'pattern':'replacement'"
 - Operations details (pattern type, segments, groups) / Детали операций (тип паттерна, сегменты, группы)
 - Input file size / Размер входного файла
 - Processing statistics (replacements, size changes) / Статистику обработки (замены, изменения размера)
+
+### Case-Insensitive Search / Поиск без учёта регистра
+
+**NEW in 26.0422 / НОВОЕ в 26.0422**
+
+Use `/i` flag at the end of operation to perform case-insensitive matching:
+
+**Syntax / Синтаксис:**
+```cmd
+REM Without encoding / Без кодировки
+replacer.exe "file.txt":- "'hello':'HELLO'/i"
+
+REM With encoding / С кодировкой
+replacer.exe "file.txt":- "'hello':'HELLO':utf/i"
+```
+
+**Features / Возможности:**
+- Works with literal patterns / Работает с литеральными паттернами
+- Works with wildcards / Работает с wildcards
+- Works with capture groups / Работает с группами захвата
+- Byte-by-byte case comparison using `tolower()` / Побайтовое сравнение регистра через `tolower()`
+
+**Examples / Примеры:**
+```cmd
+REM Match any case variation / Найти любой вариант регистра
+replacer.exe "file.txt":- "'hello':'HELLO'/i"
+REM Matches: hello, Hello, HELLO, HeLLo, etc.
+
+REM With wildcards / С wildcards
+replacer.exe "file.txt":- "'error'+*+'found':'ERROR FOUND'/i"
+REM Matches: error 123 found, ERROR abc FOUND, Error XYZ Found, etc.
+
+REM With capture groups / С группами захвата
+replacer.exe "file.txt":- "'name: '+{name=*}/i:'{name}'"
+REM Matches: name: John, NAME: JOHN, Name: John, etc.
+```
 
 ### Concatenation / Конкатенация
 
@@ -814,10 +866,9 @@ replacer.exe "emails.txt":- "{user=*}+'@'+*:{user}"
 
 ```cmd
 REM Anonymize phone numbers but keep format
-replacer.exe "contacts.txt":- "'+7 ('+{code=*}+') '+{*}+'-'+{*}+'-'+{*}:'+7 ('+{code}+') XXX-XX-XX'"
+echo +7 (905) 098-76-54 | replacer -d -:- "'+7 ('+{code=*}+') '+{num1=*}+'-'+{num2=*}+'-'+{num3=*}:'+7 ('+{code}+') '+{num1}+'-\3-XX'"
 ```
-**English:** Input: `+7 (495) 123-45-67` → Output: `+7 (495) XXX-XX-XX`  
-**Русский:** Вход: `+7 (495) 123-45-67` → Выход: `+7 (495) XXX-XX-XX`
+**English:** Input: `+7 (905) 098-76-54` → Output: `+7 (905) 098-76-XX`  
 
 ```cmd
 REM Reformat function calls: func(arg) to arg.func()
@@ -897,6 +948,19 @@ REM Generate rename commands from file list
 replacer.exe "files.txt":- "{name=*}+'.txt':'ren \"'+{name}+'.txt\" \"new_'+{name}+'.txt\"'"
 REM Input: document.txt
 REM Output: ren "document.txt" "new_document.txt"
+```
+
+**Case-insensitive text normalization / Нормализация текста без учёта регистра:**
+```cmd
+REM Normalize error messages regardless of case
+replacer.exe "logs.txt":- "'error'+*+'failed':'ERROR: Operation failed'/i"
+REM Input: Error 123 failed, ERROR abc FAILED, error XYZ Failed
+REM Output: ERROR: Operation failed (all variants)
+
+REM Fix inconsistent keywords in code
+replacer.exe "code.sql":- "'select':'SELECT'/i 'from':'FROM'/i 'where':'WHERE'/i"
+REM Input: Select * From users Where id=1
+REM Output: SELECT * FROM users WHERE id=1
 ```
 
 ---

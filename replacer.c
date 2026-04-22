@@ -83,6 +83,9 @@ typedef struct {
   // NEW: Named groups defined in search pattern
   NamedGroup defined_groups[MAX_CAPTURE_GROUPS];
   int defined_group_count;
+
+  // NEW: Case-insensitive flag
+  int ignore_case;  // 1 if /i flag is present
 } Operation;
 
 // ============================================================================
@@ -91,22 +94,22 @@ typedef struct {
 
 void print_error(const char* msg_en, const char* msg_ru) {
   fprintf(stderr, COLOR_RED "Error: " COLOR_RESET "%s\n", msg_en);
-  fprintf(stderr, COLOR_RED "éË®°™†: " COLOR_RESET "%s\n", msg_ru);
+  fprintf(stderr, COLOR_RED "–û—à–∏–±–∫–∞: " COLOR_RESET "%s\n", msg_ru);
 }
 
 void print_error_pos(const char* msg_en, const char* msg_ru, int pos) {
   fprintf(stderr, COLOR_RED "Error: " COLOR_RESET "%s %d\n", msg_en, pos);
-  fprintf(stderr, COLOR_RED "éË®°™†: " COLOR_RESET "%s %d\n", msg_ru, pos);
+  fprintf(stderr, COLOR_RED "–û—à–∏–±–∫–∞: " COLOR_RESET "%s %d\n", msg_ru, pos);
 }
 
 void print_error_str(const char* msg_en, const char* msg_ru, const char* str) {
   fprintf(stderr, COLOR_RED "Error: " COLOR_RESET "%s '%s'\n", msg_en, str);
-  fprintf(stderr, COLOR_RED "éË®°™†: " COLOR_RESET "%s '%s'\n", msg_ru, str);
+  fprintf(stderr, COLOR_RED "–û—à–∏–±–∫–∞: " COLOR_RESET "%s '%s'\n", msg_ru, str);
 }
 
 void print_error_char(const char* msg_en, const char* msg_ru, char c, int pos) {
   fprintf(stderr, COLOR_RED "Error: " COLOR_RESET "%s '%c' at position %d\n", msg_en, c, pos);
-  fprintf(stderr, COLOR_RED "éË®°™†: " COLOR_RESET "%s '%c' ¢ ØÆß®Ê®® %d\n", msg_ru, c, pos);
+  fprintf(stderr, COLOR_RED "–û—à–∏–±–∫–∞: " COLOR_RESET "%s '%c' –≤ –ø–æ–∑–∏—Ü–∏–∏ %d\n", msg_ru, c, pos);
 }
 
 // Validate group name: [a-zA-Z][a-zA-Z0-9_]*, max 32 chars
@@ -114,7 +117,7 @@ int validate_group_name(const char* name, int len, int pos) {
   if (len == 0) {
     print_error_pos(
       "Empty capture group name '{:...}' at position",
-      "è„·‚Æ• ®¨Ô £‡„ØØÎ ß†Â¢†‚† '{:...}' ¢ ØÆß®Ê®®",
+      "–ü—É—Å—Ç–æ–µ –∏–º—è –≥—Ä—É–ø–ø—ã –∑–∞—Ö–≤–∞—Ç–∞ '{:...}' –≤ –ø–æ–∑–∏—Ü–∏–∏",
       pos
     );
     return 0;
@@ -123,7 +126,7 @@ int validate_group_name(const char* name, int len, int pos) {
   if (len > MAX_GROUP_NAME_LEN) {
     print_error_pos(
       "Group name too long (max 32 characters) at position",
-      "ë´®Ë™Æ¨ §´®≠≠Æ• ®¨Ô £‡„ØØÎ (¨†™·®¨„¨ 32 ·®¨¢Æ´†) ¢ ØÆß®Ê®®",
+      "–°–ª–∏—à–∫–æ–º –¥–ª–∏–Ω–Ω–æ–µ –∏–º—è –≥—Ä—É–ø–ø—ã (–º–∞–∫—Å–∏–º—É–º 32 —Å–∏–º–≤–æ–ª–∞) –≤ –ø–æ–∑–∏—Ü–∏–∏",
       pos
     );
     return 0;
@@ -132,7 +135,7 @@ int validate_group_name(const char* name, int len, int pos) {
   if (!isalpha((unsigned char)name[0])) {
     print_error_pos(
       "Group name must start with a letter at position",
-      "à¨Ô £‡„ØØÎ §Æ´¶≠Æ ≠†Á®≠†‚Ï·Ô · °„™¢Î ¢ ØÆß®Ê®®",
+      "–ò–º—è –≥—Ä—É–ø–ø—ã –¥–æ–ª–∂–Ω–æ –Ω–∞—á–∏–Ω–∞—Ç—å—Å—è —Å –±—É–∫–≤—ã –≤ –ø–æ–∑–∏—Ü–∏–∏",
       pos
     );
     return 0;
@@ -143,7 +146,7 @@ int validate_group_name(const char* name, int len, int pos) {
     if (!isalnum((unsigned char)c) && c != '_') {
       print_error_char(
         "Invalid character in group name (use only: a-z, A-Z, 0-9, _)",
-        "ç•§ÆØ„·‚®¨Î© ·®¨¢Æ´ ¢ ®¨•≠® £‡„ØØÎ (®·ØÆ´Ïß„©‚• ‚Æ´Ï™Æ: a-z, A-Z, 0-9, _)",
+        "–ù–µ–¥–æ–ø—É—Å—Ç–∏–º—ã–π —Å–∏–º–≤–æ–ª –≤ –∏–º–µ–Ω–∏ –≥—Ä—É–ø–ø—ã (–∏—Å–ø–æ–ª—å–∑—É–π—Ç–µ —Ç–æ–ª—å–∫–æ: a-z, A-Z, 0-9, _)",
         c, pos + i
       );
       return 0;
@@ -154,6 +157,13 @@ int validate_group_name(const char* name, int len, int pos) {
 }
 
 // ============================================================================
+
+// Convert bytes to lowercase (for case-insensitive matching)
+void to_lowercase(unsigned char* dest, const unsigned char* src, size_t len) {
+  for (size_t i = 0; i < len; i++) {
+    dest[i] = tolower(src[i]);
+  }
+}
 
 int get_codepage(Encoding enc) {
   switch (enc) {
@@ -828,7 +838,7 @@ int parse_concatenated_input_with_captures(const char* input,
         brace_depth--;
         if (brace_depth == 0 && brace_start) {
           if (brace_count >= MAX_CAPTURE_GROUPS) {
-            print_error("Too many capture groups (max 99)", "ë´®Ë™Æ¨ ¨≠Æ£Æ £‡„ØØ ß†Â¢†‚† (¨†™·®¨„¨ 99)");
+            print_error("Too many capture groups (max 99)", "–°–ª–∏—à–∫–æ–º –º–Ω–æ–≥–æ –≥—Ä—É–ø–ø –∑–∞—Ö–≤–∞—Ç–∞ (–º–∞–∫—Å–∏–º—É–º 99)");
             return 0;
           }
           brace_positions[brace_count].start_pos = brace_start - input;
@@ -841,7 +851,7 @@ int parse_concatenated_input_with_captures(const char* input,
   }
 
   if (brace_depth != 0) {
-    print_error("Unclosed capture group '{'", "ç•ß†™‡Î‚†Ô £‡„ØØ† ß†Â¢†‚† '{'");
+    print_error("Unclosed capture group '{'", "–ù–µ–∑–∞–∫—Ä—ã—Ç–∞—è –≥—Ä—É–ø–ø–∞ –∑–∞—Ö–≤–∞—Ç–∞ '{'");
     return 0;
   }
 
@@ -952,7 +962,7 @@ int parse_concatenated_input_with_captures(const char* input,
             char temp[MAX_GROUP_NAME_LEN + 1];
             strncpy(temp, group_content, name_len);
             temp[name_len] = '\0';
-            print_error_str("Duplicate capture group name", "Ñ„°´®‡„ÓÈ••·Ô ®¨Ô £‡„ØØÎ ß†Â¢†‚†", temp);
+            print_error_str("Duplicate capture group name", "–î—É–±–ª–∏—Ä—É—é—â–µ–µ—Å—è –∏–º—è –≥—Ä—É–ø–ø—ã –∑–∞—Ö–≤–∞—Ç–∞", temp);
             free(group_content);
             for (int i = 0; i < total_segment_count; i++) {
               if (all_segments[i].bytes) free(all_segments[i].bytes);
@@ -969,7 +979,7 @@ int parse_concatenated_input_with_captures(const char* input,
       } else {
         numbered_count++;
         if (numbered_count > 9) {
-          print_error("Too many numbered capture groups (max 9)", "ë´®Ë™Æ¨ ¨≠Æ£Æ ≠„¨•‡Æ¢†≠≠ÎÂ £‡„ØØ ß†Â¢†‚† (¨†™·®¨„¨ 9)");
+          print_error("Too many numbered capture groups (max 9)", "–°–ª–∏—à–∫–æ–º –º–Ω–æ–≥–æ –Ω—É–º–µ—Ä–æ–≤–∞–Ω–Ω—ã—Ö –≥—Ä—É–ø–ø –∑–∞—Ö–≤–∞—Ç–∞ (–º–∞–∫—Å–∏–º—É–º 9)");
           free(group_content);
           for (int i = 0; i < total_segment_count; i++) {
             if (all_segments[i].bytes) free(all_segments[i].bytes);
@@ -1246,7 +1256,7 @@ int apply_encoding_conversion(unsigned char* buffer, size_t buffer_size,
 // Returns match length if found, 0 if not found
 size_t match_pattern(unsigned char* buffer, size_t buffer_size,
                      PatternSegment* segments, int segment_count,
-                     size_t start_pos) {
+                     size_t start_pos, int ignore_case) {
   size_t pos = start_pos;
   size_t total_matched = 0;
 
@@ -1254,9 +1264,24 @@ size_t match_pattern(unsigned char* buffer, size_t buffer_size,
     PatternSegment* seg = &segments[seg_idx];
 
     if (!seg->is_wildcard) {
-      // Literal bytes - exact match
+      // Literal bytes - exact match (case-sensitive or case-insensitive)
       if (pos + seg->len > buffer_size) return 0;
-      if (memcmp(buffer + pos, seg->bytes, seg->len) != 0) return 0;
+
+      if (ignore_case) {
+        // Case-insensitive comparison
+        int match = 1;
+        for (size_t i = 0; i < seg->len; i++) {
+          if (tolower(buffer[pos + i]) != tolower(seg->bytes[i])) {
+            match = 0;
+            break;
+          }
+        }
+        if (!match) return 0;
+      } else {
+        // Case-sensitive comparison
+        if (memcmp(buffer + pos, seg->bytes, seg->len) != 0) return 0;
+      }
+
       pos += seg->len;
       total_matched += seg->len;
     } else {
@@ -1287,22 +1312,51 @@ size_t match_pattern(unsigned char* buffer, size_t buffer_size,
             if (pos < buffer_size) {
               // Try with one byte consumed
               size_t test_pos = pos + 1;
-              if (test_pos + next_seg->len <= buffer_size &&
-                  memcmp(buffer + test_pos, next_seg->bytes, next_seg->len) ==
-                      0) {
-                pos++;
-                total_matched++;
-                matched_with_byte = 1;
+              int match = 1;
+              if (test_pos + next_seg->len <= buffer_size) {
+                if (ignore_case) {
+                  for (size_t i = 0; i < next_seg->len; i++) {
+                    if (tolower(buffer[test_pos + i]) != tolower(next_seg->bytes[i])) {
+                      match = 0;
+                      break;
+                    }
+                  }
+                } else {
+                  if (memcmp(buffer + test_pos, next_seg->bytes, next_seg->len) != 0) {
+                    match = 0;
+                  }
+                }
+                if (match) {
+                  pos++;
+                  total_matched++;
+                  matched_with_byte = 1;
+                }
               }
             }
 
             if (!matched_with_byte) {
               // Try with zero bytes (skip the optional byte)
-              if (pos + next_seg->len <= buffer_size &&
-                  memcmp(buffer + pos, next_seg->bytes, next_seg->len) == 0) {
-                // Match with zero bytes - do nothing, continue to next segment
+              int match = 1;
+              if (pos + next_seg->len <= buffer_size) {
+                if (ignore_case) {
+                  for (size_t i = 0; i < next_seg->len; i++) {
+                    if (tolower(buffer[pos + i]) != tolower(next_seg->bytes[i])) {
+                      match = 0;
+                      break;
+                    }
+                  }
+                } else {
+                  if (memcmp(buffer + pos, next_seg->bytes, next_seg->len) != 0) {
+                    match = 0;
+                  }
+                }
+                if (match) {
+                  // Match with zero bytes - do nothing, continue to next segment
+                } else {
+                  return 0;  // Neither option matches
+                }
               } else {
-                return 0;  // Neither option matches
+                return 0;
               }
             }
           } else {
@@ -1327,9 +1381,21 @@ size_t match_pattern(unsigned char* buffer, size_t buffer_size,
             size_t search_start = pos;
             size_t found_pos = buffer_size;
 
-            for (size_t i = search_start; i <= buffer_size - next_seg->len;
-                 i++) {
-              if (memcmp(buffer + i, next_seg->bytes, next_seg->len) == 0) {
+            for (size_t i = search_start; i <= buffer_size - next_seg->len; i++) {
+              int match = 1;
+              if (ignore_case) {
+                for (size_t j = 0; j < next_seg->len; j++) {
+                  if (tolower(buffer[i + j]) != tolower(next_seg->bytes[j])) {
+                    match = 0;
+                    break;
+                  }
+                }
+              } else {
+                if (memcmp(buffer + i, next_seg->bytes, next_seg->len) != 0) {
+                  match = 0;
+                }
+              }
+              if (match) {
                 found_pos = i;
                 break;
               }
@@ -1356,7 +1422,8 @@ size_t match_pattern(unsigned char* buffer, size_t buffer_size,
 // ============================================================================
 size_t match_pattern_with_captures(unsigned char* buffer, size_t buffer_size,
                                    PatternSegment* segments, int segment_count,
-                                   size_t start_pos, CaptureContext* captures) {
+                                   size_t start_pos, CaptureContext* captures,
+                                   int ignore_case) {
   size_t pos = start_pos;
   size_t total_matched = 0;
 
@@ -1400,9 +1467,24 @@ size_t match_pattern_with_captures(unsigned char* buffer, size_t buffer_size,
     size_t matched_len = 0;
 
     if (!seg->is_wildcard) {
-      // Literal bytes - exact match
+      // Literal bytes - exact match (case-sensitive or case-insensitive)
       if (pos + seg->len > buffer_size) return 0;
-      if (memcmp(buffer + pos, seg->bytes, seg->len) != 0) return 0;
+
+      if (ignore_case) {
+        // Case-insensitive comparison
+        int match = 1;
+        for (size_t i = 0; i < seg->len; i++) {
+          if (tolower(buffer[pos + i]) != tolower(seg->bytes[i])) {
+            match = 0;
+            break;
+          }
+        }
+        if (!match) return 0;
+      } else {
+        // Case-sensitive comparison
+        if (memcmp(buffer + pos, seg->bytes, seg->len) != 0) return 0;
+      }
+
       matched_len = seg->len;
     } else {
       // Wildcard matching (same logic as original match_pattern)
@@ -1420,16 +1502,46 @@ size_t match_pattern_with_captures(unsigned char* buffer, size_t buffer_size,
             int matched_with_byte = 0;
             if (pos < buffer_size) {
               size_t test_pos = pos + 1;
-              if (test_pos + next_seg->len <= buffer_size &&
-                  memcmp(buffer + test_pos, next_seg->bytes, next_seg->len) == 0) {
-                matched_len = 1;
-                matched_with_byte = 1;
+              int match = 1;
+              if (test_pos + next_seg->len <= buffer_size) {
+                if (ignore_case) {
+                  for (size_t i = 0; i < next_seg->len; i++) {
+                    if (tolower(buffer[test_pos + i]) != tolower(next_seg->bytes[i])) {
+                      match = 0;
+                      break;
+                    }
+                  }
+                } else {
+                  if (memcmp(buffer + test_pos, next_seg->bytes, next_seg->len) != 0) {
+                    match = 0;
+                  }
+                }
+                if (match) {
+                  matched_len = 1;
+                  matched_with_byte = 1;
+                }
               }
             }
             if (!matched_with_byte) {
-              if (pos + next_seg->len <= buffer_size &&
-                  memcmp(buffer + pos, next_seg->bytes, next_seg->len) == 0) {
-                matched_len = 0;
+              int match = 1;
+              if (pos + next_seg->len <= buffer_size) {
+                if (ignore_case) {
+                  for (size_t i = 0; i < next_seg->len; i++) {
+                    if (tolower(buffer[pos + i]) != tolower(next_seg->bytes[i])) {
+                      match = 0;
+                      break;
+                    }
+                  }
+                } else {
+                  if (memcmp(buffer + pos, next_seg->bytes, next_seg->len) != 0) {
+                    match = 0;
+                  }
+                }
+                if (match) {
+                  matched_len = 0;
+                } else {
+                  return 0;
+                }
               } else {
                 return 0;
               }
@@ -1448,7 +1560,20 @@ size_t match_pattern_with_captures(unsigned char* buffer, size_t buffer_size,
           if (!next_seg->is_wildcard) {
             size_t found_pos = buffer_size;
             for (size_t i = pos; i <= buffer_size - next_seg->len; i++) {
-              if (memcmp(buffer + i, next_seg->bytes, next_seg->len) == 0) {
+              int match = 1;
+              if (ignore_case) {
+                for (size_t j = 0; j < next_seg->len; j++) {
+                  if (tolower(buffer[i + j]) != tolower(next_seg->bytes[j])) {
+                    match = 0;
+                    break;
+                  }
+                }
+              } else {
+                if (memcmp(buffer + i, next_seg->bytes, next_seg->len) != 0) {
+                  match = 0;
+                }
+              }
+              if (match) {
                 found_pos = i;
                 break;
               }
@@ -1547,7 +1672,7 @@ int build_replacement_with_captures(const char* template,
           if (!found) {
             print_error_str(
               "Unknown capture group in replacement",
-              "ç•®ß¢•·‚≠†Ô £‡„ØØ† ß†Â¢†‚† ¢ ß†¨•≠•",
+              "–ù–µ–∏–∑–≤–µ—Å—Ç–Ω–∞—è –≥—Ä—É–ø–ø–∞ –∑–∞—Ö–≤–∞—Ç–∞ –≤ –∑–∞–º–µ–Ω–µ",
               name
             );
             return 0;
@@ -1683,32 +1808,50 @@ int apply_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
 
     while (i < current_size) {
       if (op->pattern_type == PATTERN_LITERAL) {
-        // Existing memcmp logic for literal patterns
-        if (i + op->search_len <= current_size &&
-            memcmp(current + i, op->search_bytes, op->search_len) == 0) {
-          if (!op->delete_mode) {
-            if (op->has_captures_in_replace) {
-              // Build replacement with \0 substitution
-              CaptureContext captures = {0};
-              captures.entire_match.data = current + i;
-              captures.entire_match.len = op->search_len;
-
-              unsigned char* replacement = NULL;
-              size_t replacement_len = 0;
-              if (build_replacement_with_captures(op->replace_template, &captures,
-                                                  ENCODING_UTF8, &replacement, &replacement_len)) {
-                memcpy(temp + temp_pos, replacement, replacement_len);
-                temp_pos += replacement_len;
-                free(replacement);
+        // Literal pattern matching (case-sensitive or case-insensitive)
+        if (i + op->search_len <= current_size) {
+          int match = 0;
+          if (op->ignore_case) {
+            // Case-insensitive comparison
+            match = 1;
+            for (size_t j = 0; j < op->search_len; j++) {
+              if (tolower(current[i + j]) != tolower(op->search_bytes[j])) {
+                match = 0;
+                break;
               }
-            } else {
-              // Use static replacement
-              memcpy(temp + temp_pos, op->replace_bytes, op->replace_len);
-              temp_pos += op->replace_len;
             }
+          } else {
+            // Case-sensitive comparison
+            match = (memcmp(current + i, op->search_bytes, op->search_len) == 0);
           }
-          i += op->search_len;
-          replacements++;
+
+          if (match) {
+            if (!op->delete_mode) {
+              if (op->has_captures_in_replace) {
+                // Build replacement with \0 substitution
+                CaptureContext captures = {0};
+                captures.entire_match.data = current + i;
+                captures.entire_match.len = op->search_len;
+
+                unsigned char* replacement = NULL;
+                size_t replacement_len = 0;
+                if (build_replacement_with_captures(op->replace_template, &captures,
+                                                    ENCODING_UTF8, &replacement, &replacement_len)) {
+                  memcpy(temp + temp_pos, replacement, replacement_len);
+                  temp_pos += replacement_len;
+                  free(replacement);
+                }
+              } else {
+                // Use static replacement
+                memcpy(temp + temp_pos, op->replace_bytes, op->replace_len);
+                temp_pos += op->replace_len;
+              }
+            }
+            i += op->search_len;
+            replacements++;
+          } else {
+            temp[temp_pos++] = current[i++];
+          }
         } else {
           temp[temp_pos++] = current[i++];
         }
@@ -1724,7 +1867,7 @@ int apply_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
         captures.named_group_count = op->defined_group_count;
 
         size_t match_len = match_pattern_with_captures(current, current_size, op->segments,
-                                         op->segment_count, i, &captures);
+                                         op->segment_count, i, &captures, op->ignore_case);
         if (match_len > 0) {
           // Update entire_match length
           captures.entire_match.len = match_len;
@@ -1818,6 +1961,7 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
 
   char* replace_str = NULL;
   const char* encoding_str = NULL;
+  int ignore_case = 0;
 
   if (second_colon) {
     size_t replace_len = second_colon - replace_start;
@@ -1829,9 +1973,45 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
     strncpy(replace_str, replace_start, replace_len);
     replace_str[replace_len] = '\0';
     encoding_str = second_colon + 1;
-    encoding = parse_encoding(encoding_str);
+
+    // Check for /i flag at the end
+    size_t enc_len = strlen(encoding_str);
+    if (enc_len >= 2 && encoding_str[enc_len - 2] == '/' && encoding_str[enc_len - 1] == 'i') {
+      ignore_case = 1;
+      // Remove /i from encoding string
+      char* enc_copy = strdup(encoding_str);
+      if (enc_copy) {
+        enc_copy[enc_len - 2] = '\0';
+
+        // Remove trailing spaces before /i
+        size_t copy_len = strlen(enc_copy);
+        while (copy_len > 0 && enc_copy[copy_len - 1] == ' ') {
+          enc_copy[copy_len - 1] = '\0';
+          copy_len--;
+        }
+
+        encoding = parse_encoding(enc_copy);
+        free(enc_copy);
+      }
+    } else {
+      encoding = parse_encoding(encoding_str);
+    }
   } else {
     replace_str = strdup(replace_start);
+
+    // Check for /i flag at the end of replace_str
+    size_t rep_len = strlen(replace_str);
+    if (rep_len >= 2 && replace_str[rep_len - 2] == '/' && replace_str[rep_len - 1] == 'i') {
+      ignore_case = 1;
+      replace_str[rep_len - 2] = '\0';  // Remove /i
+
+      // Remove trailing spaces before /i
+      rep_len = strlen(replace_str);
+      while (rep_len > 0 && replace_str[rep_len - 1] == ' ') {
+        replace_str[rep_len - 1] = '\0';
+        rep_len--;
+      }
+    }
   }
 
   // Check if search string contains '+', wildcards, or capture groups
@@ -2043,6 +2223,9 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
     op->replace_template = NULL;
   }
 
+  // Set ignore_case flag
+  op->ignore_case = ignore_case;
+
   free(search_str);
   free(replace_str);
   return 1;
@@ -2089,206 +2272,218 @@ int main(int argc, char* argv[]) {
 
   if (argc < 2 + arg_offset) {
     fprintf(stderr,
-            "\n" COLOR_YELLOW "REPLACER " COLOR_YELLOW "v26.0421 - " COLOR_CYAN
+            "\n" COLOR_YELLOW "REPLACER " COLOR_YELLOW "v26.0422 - " COLOR_CYAN
             "File content search and replace utility with encoding "
             "conversion" COLOR_RESET "\n");
     fprintf(stderr,
-            "                    ì‚®´®‚† ØÆ®·™† ® ß†¨•≠Î ·Æ§•‡¶®¨Æ£Æ ‰†©´Æ¢ · "
-            "™Æ≠¢•‡‚†Ê®•© ™Æ§®‡Æ¢Æ™\n");
+            "                    –£—Ç–∏–ª–∏—Ç–∞ –ø–æ–∏—Å–∫–∞ –∏ –∑–∞–º–µ–Ω—ã —Å–æ–¥–µ—Ä–∂–∏–º–æ–≥–æ —Ñ–∞–π–ª–æ–≤ —Å "
+            "–∫–æ–Ω–≤–µ—Ä—Ç–∞—Ü–∏–µ–π –∫–æ–¥–∏—Ä–æ–≤–æ–∫\n");
     fprintf(stderr, "(By BoyNG - \nVyacheslav Burnosov)\n\n\n");
     fprintf(stderr,
-            COLOR_YELLOW "Usage / à·ØÆ´ÏßÆ¢†≠®•:" COLOR_RESET " %s " COLOR_GREEN
+            COLOR_YELLOW "Usage / –ò—Å–ø–æ–ª—å–∑–æ–≤–∞–Ω–∏–µ:" COLOR_RESET " %s " COLOR_GREEN
                          "[-d] [encoding:]<input>[:[encoding][:output]]" COLOR_RESET
                          " [operations...]\n\n",
             argv[0]);
 
     fprintf(stderr,
-            COLOR_YELLOW "File specification / îÆ‡¨†‚ ‰†©´†:" COLOR_RESET "\n");
+            COLOR_YELLOW "File specification / –§–æ—Ä–º–∞—Ç —Ñ–∞–π–ª–∞:" COLOR_RESET "\n");
     fprintf(stderr, "  " COLOR_GREEN "file.bin" COLOR_RESET
                     "                    - " COLOR_CYAN
                     "input file, output will be file_OUT.bin" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                ¢ÂÆ§≠Æ© ‰†©´, ¢ÎÂÆ§ °„§•‚ "
+            "                                –≤—Ö–æ–¥–Ω–æ–π —Ñ–∞–π–ª, –≤—ã—Ö–æ–¥ –±—É–¥–µ—Ç "
             "file_OUT.bin\n");
     fprintf(stderr, "  " COLOR_GREEN "file.bin:out.bin" COLOR_RESET
                     "            - " COLOR_CYAN
                     "input file with custom output name" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                ¢ÂÆ§≠Æ© ‰†©´ · „™†ß†≠®•¨ ®¨•≠® "
-            "¢ÎÂÆ§≠Æ£Æ\n");
+            "                                –≤—Ö–æ–¥–Ω–æ–π —Ñ–∞–π–ª —Å —É–∫–∞–∑–∞–Ω–∏–µ–º –∏–º–µ–Ω–∏ "
+            "–≤—ã—Ö–æ–¥–Ω–æ–≥–æ\n");
     fprintf(stderr, "  " COLOR_GREEN "file.bin:-" COLOR_RESET
                     "                  - " COLOR_CYAN
                     "output to stdout (like 'type' command)" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                ¢Î¢Æ§ ¢ stdout (™†™ ™Æ¨†≠§† "
+            "                                –≤—ã–≤–æ–¥ –≤ stdout (–∫–∞–∫ –∫–æ–º–∞–Ω–¥–∞ "
             "'type')\n");
     fprintf(stderr, "  " COLOR_GREEN "file.txt:utf" COLOR_RESET
                     "                - " COLOR_CYAN
                     "convert file to UTF-8 encoding" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                ™Æ≠¢•‡‚®‡Æ¢†‚Ï ‰†©´ ¢ ™Æ§®‡Æ¢™„ "
+            "                                –∫–æ–Ω–≤–µ—Ä—Ç–∏—Ä–æ–≤–∞—Ç—å —Ñ–∞–π–ª –≤ –∫–æ–¥–∏—Ä–æ–≤–∫—É "
             "UTF-8\n");
     fprintf(stderr, "  " COLOR_GREEN "file.txt:-:utf" COLOR_RESET
                     "              - " COLOR_CYAN
                     "output to stdout with UTF-8 conversion" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                ¢Î¢Æ§ ¢ stdout · ™Æ≠¢•‡‚†Ê®•© ¢ "
+            "                                –≤—ã–≤–æ–¥ –≤ stdout —Å –∫–æ–Ω–≤–µ—Ä—Ç–∞—Ü–∏–µ–π –≤ "
             "UTF-8\n");
     fprintf(stderr, "  " COLOR_GREEN "win:file.txt" COLOR_RESET
                     "                - " COLOR_CYAN
                     "read file as Windows-1251" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                Á®‚†‚Ï ‰†©´ ™†™ Windows-1251\n");
+            "                                —á–∏—Ç–∞—Ç—å —Ñ–∞–π–ª –∫–∞–∫ Windows-1251\n");
     fprintf(stderr, "  " COLOR_GREEN "win:file.txt:utf" COLOR_RESET
                     "            - " COLOR_CYAN
                     "convert Windows-1251 to UTF-8" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                ™Æ≠¢•‡‚®‡Æ¢†‚Ï Windows-1251 ¢ "
+            "                                –∫–æ–Ω–≤–µ—Ä—Ç–∏—Ä–æ–≤–∞—Ç—å Windows-1251 –≤ "
             "UTF-8\n");
     fprintf(stderr, "  " COLOR_GREEN "win:file.txt:-" COLOR_RESET
                     "              - " COLOR_CYAN
                     "output Windows-1251 file to stdout" COLOR_RESET "\n");
     fprintf(
         stderr,
-        "                                ¢Î¢Æ§ ‰†©´† Windows-1251 ¢ stdout\n");
+        "                                –≤—ã–≤–æ–¥ —Ñ–∞–π–ª–∞ Windows-1251 –≤ stdout\n");
     fprintf(stderr, "  " COLOR_GREEN "win:file.txt:-:utf" COLOR_RESET
                     "          - " COLOR_CYAN
                     "convert and output to stdout" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                ™Æ≠¢•‡‚†Ê®Ô ® ¢Î¢Æ§ ¢ stdout\n");
+            "                                –∫–æ–Ω–≤–µ—Ä—Ç–∞—Ü–∏—è –∏ –≤—ã–≤–æ–¥ –≤ stdout\n");
     fprintf(stderr, "  " COLOR_GREEN "win:file.txt:utf:out.txt" COLOR_RESET
                     "    - " COLOR_CYAN
                     "convert with custom output name" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                ™Æ≠¢•‡‚†Ê®Ô · „™†ß†≠®•¨ ®¨•≠® "
-            "¢ÎÂÆ§†\n");
+            "                                –∫–æ–Ω–≤–µ—Ä—Ç–∞—Ü–∏—è —Å —É–∫–∞–∑–∞–Ω–∏–µ–º –∏–º–µ–Ω–∏ "
+            "–≤—ã—Ö–æ–¥–∞\n");
     fprintf(stderr, "  " COLOR_GREEN "-" COLOR_RESET
                     "                           - " COLOR_CYAN
                     "read from stdin, write to stdout" COLOR_RESET "\n");
     fprintf(
         stderr,
-        "                                Á®‚†‚Ï ®ß stdin, Ø®·†‚Ï ¢ stdout\n");
+        "                                —á–∏—Ç–∞—Ç—å –∏–∑ stdin, –ø–∏—Å–∞—Ç—å –≤ stdout\n");
     fprintf(stderr, "  " COLOR_GREEN "win:-:utf" COLOR_RESET
                     "                   - " COLOR_CYAN
                     "stdin/stdout with encoding conversion" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                stdin/stdout · ™Æ≠¢•‡‚†Ê®•© "
-            "™Æ§®‡Æ¢™®\n");
+            "                                stdin/stdout —Å –∫–æ–Ω–≤–µ—Ä—Ç–∞—Ü–∏–µ–π "
+            "–∫–æ–¥–∏—Ä–æ–≤–∫–∏\n");
     fprintf(stderr, "\n");
     getchar();
     fprintf(stderr, "\n" COLOR_YELLOW
-                    "Operation format / îÆ‡¨†‚ ÆØ•‡†Ê®©:" COLOR_RESET "\n");
+                    "Operation format / –§–æ—Ä–º–∞—Ç –æ–ø–µ—Ä–∞—Ü–∏–π:" COLOR_RESET "\n");
     fprintf(stderr, "  " COLOR_GREEN "search:replace" COLOR_RESET
                     "              - " COLOR_CYAN
-                    "search and replace" COLOR_RESET " / ≠†©‚® ® ß†¨•≠®‚Ï\n");
+                    "search and replace" COLOR_RESET " / –Ω–∞–π—Ç–∏ –∏ –∑–∞–º–µ–Ω–∏—Ç—å\n");
     fprintf(stderr, "  " COLOR_GREEN "search:" COLOR_RESET
                     "                     - " COLOR_CYAN
                     "delete (empty replace)" COLOR_RESET
-                    " / „§†´®‚Ï (Ø„·‚†Ô ß†¨•≠†)\n");
+                    " / —É–¥–∞–ª–∏—Ç—å (–ø—É—Å—Ç–∞—è –∑–∞–º–µ–Ω–∞)\n");
     fprintf(stderr,
             "  " COLOR_GREEN "search:replace:encoding" COLOR_RESET
             "     - " COLOR_CYAN
             "with specific encoding for this operation" COLOR_RESET "\n");
     fprintf(
         stderr,
-        "                                · „™†ß†≠®•¨ ™Æ§®‡Æ¢™® §´Ô ÆØ•‡†Ê®®\n");
+        "                                —Å —É–∫–∞–∑–∞–Ω–∏–µ–º –∫–æ–¥–∏—Ä–æ–≤–∫–∏ –¥–ª—è –æ–ø–µ—Ä–∞—Ü–∏–∏\n");
 
     fprintf(stderr,
             "\n" COLOR_YELLOW
-            "Search/Replace formats / îÆ‡¨†‚Î ØÆ®·™†/ß†¨•≠Î:" COLOR_RESET "\n");
+            "Search/Replace formats / –§–æ—Ä–º–∞—Ç—ã –ø–æ–∏—Å–∫–∞/–∑–∞–º–µ–Ω—ã:" COLOR_RESET "\n");
     fprintf(stderr,
             "  Hex: " COLOR_GREEN "0xFFAA" COLOR_RESET " or " COLOR_GREEN
-            "$FFAA" COLOR_RESET " / ®´® " COLOR_GREEN "$FFAA" COLOR_RESET "\n");
+            "$FFAA" COLOR_RESET " / –∏–ª–∏ " COLOR_GREEN "$FFAA" COLOR_RESET "\n");
     fprintf(stderr, "  Text: " COLOR_GREEN "\"hello\"" COLOR_RESET
-                    " or plain text / í•™·‚: " COLOR_GREEN
-                    "\"Ø‡®¢•‚\"" COLOR_RESET " ®´® Ø‡Æ·‚Æ ‚•™·‚\n");
+                    " or plain text / –¢–µ–∫—Å—Ç: " COLOR_GREEN
+                    "\"–ø—Ä–∏–≤–µ—Ç\"" COLOR_RESET " –∏–ª–∏ –ø—Ä–æ—Å—Ç–æ —Ç–µ–∫—Å—Ç\n");
 
-    fprintf(stderr, "\n" COLOR_YELLOW "Encodings / äÆ§®‡Æ¢™®:" COLOR_RESET
+    fprintf(stderr, "\n" COLOR_YELLOW "Encodings / –ö–æ–¥–∏—Ä–æ–≤–∫–∏:" COLOR_RESET
                     " " COLOR_GREEN "win" COLOR_RESET " (CP1251), " COLOR_GREEN
                     "dos" COLOR_RESET " (CP866), " COLOR_GREEN "koi" COLOR_RESET
                     " (KOI8-R), " COLOR_GREEN "utf" COLOR_RESET
-                    " (UTF-8, default/ØÆ „¨Æ´Á†≠®Ó)\n");
+                    " (UTF-8, default/–ø–æ —É–º–æ–ª—á–∞–Ω–∏—é)\n");
 
-    fprintf(stderr, "\n" COLOR_YELLOW "Debug mode / ê•¶®¨ Æ‚´†§™®:" COLOR_RESET "\n");
+    fprintf(stderr, "\n" COLOR_YELLOW "Debug mode / –†–µ–∂–∏–º –æ—Ç–ª–∞–¥–∫–∏:" COLOR_RESET "\n");
     fprintf(stderr, "  " COLOR_GREEN "-d" COLOR_RESET
                     "                          - " COLOR_CYAN
                     "show detailed debug information" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                ØÆ™†ß†‚Ï ØÆ§‡Æ°≠„Ó Æ‚´†§ÆÁ≠„Ó ®≠‰Æ‡¨†Ê®Ó\n");
+            "                                –ø–æ–∫–∞–∑–∞—Ç—å –ø–æ–¥—Ä–æ–±–Ω—É—é –æ—Ç–ª–∞–¥–æ—á–Ω—É—é –∏–Ω—Ñ–æ—Ä–º–∞—Ü–∏—é\n");
     fprintf(stderr, "  " COLOR_CYAN "Note:" COLOR_RESET
                     " Must be first argument. Shows arguments, file spec, operations, sizes.\n");
-    fprintf(stderr, "  " COLOR_CYAN "è‡®¨•Á†≠®•:" COLOR_RESET
-                    " ÑÆ´¶•≠ °Î‚Ï Ø•‡¢Î¨ †‡£„¨•≠‚Æ¨. èÆ™†ßÎ¢†•‚ †‡£„¨•≠‚Î, ‰†©´Î, ÆØ•‡†Ê®®, ‡†ß¨•‡Î.\n");
+    fprintf(stderr, "  " COLOR_CYAN "–ü—Ä–∏–º–µ—á–∞–Ω–∏–µ:" COLOR_RESET
+                    " –î–æ–ª–∂–µ–Ω –±—ã—Ç—å –ø–µ—Ä–≤—ã–º –∞—Ä–≥—É–º–µ–Ω—Ç–æ–º. –ü–æ–∫–∞–∑—ã–≤–∞–µ—Ç –∞—Ä–≥—É–º–µ–Ω—Ç—ã, —Ñ–∞–π–ª—ã, –æ–ø–µ—Ä–∞—Ü–∏–∏, —Ä–∞–∑–º–µ—Ä—ã.\n");
 
     fprintf(stderr, "\n" COLOR_YELLOW
-                    "Wildcards / èÆ§·‚†≠Æ¢ÆÁ≠Î• ·®¨¢Æ´Î:" COLOR_RESET "\n");
+                    "Wildcards / –ü–æ–¥—Å—Ç–∞–Ω–æ–≤–æ—á–Ω—ã–µ —Å–∏–º–≤–æ–ª—ã:" COLOR_RESET "\n");
     fprintf(stderr, "  " COLOR_GREEN "\\." COLOR_RESET
                     "                          - " COLOR_CYAN
-                    "any single byte" COLOR_RESET " / ´Ó°Æ© Æ§®≠ °†©‚\n");
+                    "any single byte" COLOR_RESET " / –ª—é–±–æ–π –æ–¥–∏–Ω –±–∞–π—Ç\n");
     fprintf(stderr,
             "  " COLOR_GREEN "\\*" COLOR_RESET
             "                          - " COLOR_CYAN
-            "zero or more bytes" COLOR_RESET " / ≠Æ´Ï ®´® °Æ´•• °†©‚Æ¢\n");
+            "zero or more bytes" COLOR_RESET " / –Ω–æ–ª—å –∏–ª–∏ –±–æ–ª–µ–µ –±–∞–π—Ç–æ–≤\n");
     fprintf(stderr, "  " COLOR_GREEN "\\?" COLOR_RESET
                     "                          - " COLOR_CYAN
                     "optional byte (zero or one)" COLOR_RESET
-                    " / ≠•Æ°Ôß†‚•´Ï≠Î© °†©‚ (≠Æ´Ï ®´® Æ§®≠)\n");
+                    " / –Ω–µ–æ–±—è–∑–∞—Ç–µ–ª—å–Ω—ã–π –±–∞–π—Ç (–Ω–æ–ª—å –∏–ª–∏ –æ–¥–∏–Ω)\n");
     fprintf(stderr, "  " COLOR_CYAN "Note:" COLOR_RESET
                     " Use backslash to escape wildcards. Without backslash "
                     "they are literal.\n");
-    fprintf(stderr, "  " COLOR_CYAN "è‡®¨•Á†≠®•:" COLOR_RESET
-                    " à·ØÆ´Ïß„©‚• Æ°‡†‚≠Î© ·´ÌË §´Ô wildcards. Å•ß ·´ÌË† - "
-                    "´®‚•‡†´Ï≠Î• ·®¨¢Æ´Î.\n");
+    fprintf(stderr, "  " COLOR_CYAN "–ü—Ä–∏–º–µ—á–∞–Ω–∏–µ:" COLOR_RESET
+                    " –ò—Å–ø–æ–ª—å–∑—É–π—Ç–µ –æ–±—Ä–∞—Ç–Ω—ã–π —Å–ª—ç—à –¥–ª—è wildcards. –ë–µ–∑ —Å–ª—ç—à–∞ - "
+                    "–ª–∏—Ç–µ—Ä–∞–ª—å–Ω—ã–µ —Å–∏–º–≤–æ–ª—ã.\n");
 
     fprintf(stderr,
-            "\n" COLOR_YELLOW "Concatenation / äÆ≠™†‚•≠†Ê®Ô:" COLOR_RESET "\n");
+            "\n" COLOR_YELLOW "Concatenation / –ö–æ–Ω–∫–∞—Ç–µ–Ω–∞—Ü–∏—è:" COLOR_RESET "\n");
     fprintf(stderr, "  " COLOR_GREEN "+" COLOR_RESET
                     "                           - " COLOR_CYAN
-                    "join operator" COLOR_RESET " / ÆØ•‡†‚Æ‡ Æ°Í•§®≠•≠®Ô\n");
+                    "join operator" COLOR_RESET " / –æ–ø–µ—Ä–∞—Ç–æ—Ä –æ–±—ä–µ–¥–∏–Ω–µ–Ω–∏—è\n");
     fprintf(stderr, "  " COLOR_GREEN "\"text\"+0x0A+\"more\"" COLOR_RESET
                     "          - " COLOR_CYAN
                     "join text, hex, and text" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                Æ°Í•§®≠®‚Ï ‚•™·‚, hex ® ‚•™·‚\n");
+            "                                –æ–±—ä–µ–¥–∏–Ω–∏—Ç—å —Ç–µ–∫—Å—Ç, hex –∏ —Ç–µ–∫—Å—Ç\n");
     fprintf(stderr, "  " COLOR_GREEN "\"<tag>\"+\\*+\"</tag>\"" COLOR_RESET
                     "         - " COLOR_CYAN
                     "match anything between tags" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                ≠†©‚® Á‚Æ „£Æ§≠Æ ¨•¶§„ ‚•£†¨®\n");
+            "                                –Ω–∞–π—Ç–∏ —á—Ç–æ —É–≥–æ–¥–Ω–æ –º–µ–∂–¥—É —Ç–µ–≥–∞–º–∏\n");
     fprintf(stderr, "  " COLOR_GREEN "\"colo\"+\\?+\"r\"" COLOR_RESET
                     "               - " COLOR_CYAN
                     "match color, colour, colo?r" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                ≠†©‚® color, colour, colo?r\n");
+            "                                –Ω–∞–π—Ç–∏ color, colour, colo?r\n");
 
-    fprintf(stderr, "\n" COLOR_YELLOW "Capture groups / É‡„ØØÎ ß†Â¢†‚†:" COLOR_RESET "\n");
+    fprintf(stderr, "\n" COLOR_YELLOW "Capture groups / –ì—Ä—É–ø–ø—ã –∑–∞—Ö–≤–∞—Ç–∞:" COLOR_RESET "\n");
     fprintf(stderr, "  " COLOR_GREEN "{pattern}" COLOR_RESET
                     "                   - " COLOR_CYAN
                     "numbered capture group (max 9)" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                ≠„¨•‡Æ¢†≠≠†Ô £‡„ØØ† ß†Â¢†‚† (¨†™·®¨„¨ 9)\n");
+            "                                –Ω—É–º–µ—Ä–æ–≤–∞–Ω–Ω–∞—è –≥—Ä—É–ø–ø–∞ –∑–∞—Ö–≤–∞—Ç–∞ (–º–∞–∫—Å–∏–º—É–º 9)\n");
     fprintf(stderr, "  " COLOR_GREEN "{name=pattern}" COLOR_RESET
                     "              - " COLOR_CYAN
                     "named capture group (unlimited)" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                ®¨•≠Æ¢†≠≠†Ô £‡„ØØ† ß†Â¢†‚† (≠•Æ£‡†≠®Á•≠≠Æ)\n");
+            "                                –∏–º–µ–Ω–æ–≤–∞–Ω–Ω–∞—è –≥—Ä—É–ø–ø–∞ –∑–∞—Ö–≤–∞—Ç–∞ (–Ω–µ–æ–≥—Ä–∞–Ω–∏—á–µ–Ω–Ω–æ)\n");
     fprintf(stderr, "  " COLOR_GREEN "\\0" COLOR_RESET
                     "                          - " COLOR_CYAN
                     "reference entire match in replacement" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                ··Î´™† ≠† ¢·Ò ¢ÂÆ¶§•≠®• ¢ ß†¨•≠•\n");
+            "                                —Å—Å—ã–ª–∫–∞ –Ω–∞ –≤—Å—ë –≤—Ö–æ–∂–¥–µ–Ω–∏–µ –≤ –∑–∞–º–µ–Ω–µ\n");
     fprintf(stderr, "  " COLOR_GREEN "\\1" COLOR_RESET " to " COLOR_GREEN "\\9" COLOR_RESET
                     "                     - " COLOR_CYAN
                     "reference numbered groups in replacement" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                ··Î´™† ≠† ≠„¨•‡Æ¢†≠≠Î• £‡„ØØÎ ¢ ß†¨•≠•\n");
+            "                                —Å—Å—ã–ª–∫–∞ –Ω–∞ –Ω—É–º–µ—Ä–æ–≤–∞–Ω–Ω—ã–µ –≥—Ä—É–ø–ø—ã –≤ –∑–∞–º–µ–Ω–µ\n");
     fprintf(stderr, "  " COLOR_GREEN "{name}" COLOR_RESET
                     "                      - " COLOR_CYAN
                     "reference named group in replacement" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                ··Î´™† ≠† ®¨•≠Æ¢†≠≠„Ó £‡„ØØ„ ¢ ß†¨•≠•\n");
+            "                                —Å—Å—ã–ª–∫–∞ –Ω–∞ –∏–º–µ–Ω–æ–≤–∞–Ω–Ω—É—é –≥—Ä—É–ø–ø—É –≤ –∑–∞–º–µ–Ω–µ\n");
 
-    fprintf(stderr, "\n" COLOR_YELLOW "Examples / è‡®¨•‡Î:" COLOR_RESET "\n");
+    fprintf(stderr, "\n" COLOR_YELLOW "Flags / –§–ª–∞–≥–∏:" COLOR_RESET "\n");
+    fprintf(stderr, "  " COLOR_GREEN "/i" COLOR_RESET
+                    "                          - " COLOR_CYAN
+                    "case-insensitive search (add at end of operation)" COLOR_RESET "\n");
+    fprintf(stderr,
+            "                                –ø–æ–∏—Å–∫ –±–µ–∑ —É—á—ë—Ç–∞ —Ä–µ–≥–∏—Å—Ç—Ä–∞ (–¥–æ–±–∞–≤–∏—Ç—å –≤ –∫–æ–Ω–µ—Ü –æ–ø–µ—Ä–∞—Ü–∏–∏)\n");
+    fprintf(stderr, "  " COLOR_GREEN "'hello':'HELLO'/i" COLOR_RESET
+                    "         - " COLOR_CYAN
+                    "match hello, Hello, HELLO, etc." COLOR_RESET "\n");
+    fprintf(stderr,
+            "                                –Ω–∞–π—Ç–∏ hello, Hello, HELLO –∏ —Ç.–¥.\n");
+
+    fprintf(stderr, "\n" COLOR_YELLOW "Examples / –ü—Ä–∏–º–µ—Ä—ã:" COLOR_RESET "\n");
     fprintf(stderr, "  %s file.bin 0xAA:0xBB 0xCC:0xDD\n", argv[0]);
     fprintf(stderr, "  %s file.bin:out.bin 0xAA:0xBB \"old\":\"new\":win\n",
             argv[0]);
@@ -2296,8 +2491,8 @@ int main(int argc, char* argv[]) {
     fprintf(stderr, "  %s file.txt:- 0xAA:0xBB\n", argv[0]);
     fprintf(stderr, "  %s win:file.txt:-:utf\n", argv[0]);
     fprintf(stderr, "  %s win:file.txt:utf\n", argv[0]);
-    fprintf(stderr, "  %s win:file.txt:utf \"‚•·‚\":\"test\"\n", argv[0]);
-    fprintf(stderr, "  %s file.txt \"‚•·‚\":\"test\":win \"hello\":\n",
+    fprintf(stderr, "  %s win:file.txt:utf \"—Ç–µ—Å—Ç\":\"test\"\n", argv[0]);
+    fprintf(stderr, "  %s file.txt \"—Ç–µ—Å—Ç\":\"test\":win \"hello\":\n",
             argv[0]);
     fprintf(stderr, "  %s - 0xAA:0xBB < in.bin > out.bin\n", argv[0]);
     fprintf(stderr, "  type in.bin | %s - 0xAA:0xBB > out.bin\n", argv[0]);
@@ -2311,16 +2506,19 @@ int main(int argc, char* argv[]) {
         argv[0]);
     fprintf(stderr, "  %s test.txt \"colo\"+\\?+\"r\":\"COLOR\"\n", argv[0]);
     fprintf(stderr, "  %s test.bin 0xAA+\\.+0xBB:0xFF\n", argv[0]);
-    fprintf(stderr, "\n" COLOR_YELLOW "Capture group examples / è‡®¨•‡Î £‡„ØØ ß†Â¢†‚†:" COLOR_RESET "\n");
+    fprintf(stderr, "\n" COLOR_YELLOW "Capture group examples / –ü—Ä–∏–º–µ—Ä—ã –≥—Ä—É–ø–ø –∑–∞—Ö–≤–∞—Ç–∞:" COLOR_RESET "\n");
     fprintf(stderr, "  %s file.txt \"'error':'[\\0]'\"\n", argv[0]);
     fprintf(stderr, "    " COLOR_CYAN "Wrap 'error' in brackets: error -> [error]" COLOR_RESET "\n");
-    fprintf(stderr, "    " COLOR_CYAN "é°•‡≠„‚Ï 'error' ¢ ·™Æ°™®: error -> [error]" COLOR_RESET "\n");
+    fprintf(stderr, "    " COLOR_CYAN "–û–±–µ—Ä–Ω—É—Ç—å 'error' –≤ —Å–∫–æ–±–∫–∏: error -> [error]" COLOR_RESET "\n");
     fprintf(stderr, "  %s file.txt \"'['+{*}+'] '+{*}:'\\2 (\\1)'\"\n", argv[0]);
     fprintf(stderr, "    " COLOR_CYAN "Swap parts: [ERROR] File not found -> File not found (ERROR)" COLOR_RESET "\n");
-    fprintf(stderr, "    " COLOR_CYAN "èÆ¨•≠Ô‚Ï Á†·‚® ¨•·‚†¨®: [ERROR] File not found -> File not found (ERROR)" COLOR_RESET "\n");
+    fprintf(stderr, "    " COLOR_CYAN "–ü–æ–º–µ–Ω—è—Ç—å —á–∞—Å—Ç–∏ –º–µ—Å—Ç–∞–º–∏: [ERROR] File not found -> File not found (ERROR)" COLOR_RESET "\n");
     fprintf(stderr, "  %s file.txt \"'Name: '+{name=*}+', Age: '+{age=*}:'{age}+' years, name='+{name}'\"\n", argv[0]);
     fprintf(stderr, "    " COLOR_CYAN "Named groups: Name: John, Age: 30 -> 30 years, name=John" COLOR_RESET "\n");
-    fprintf(stderr, "    " COLOR_CYAN "à¨•≠Æ¢†≠≠Î• £‡„ØØÎ: Name: John, Age: 30 -> 30 years, name=John" COLOR_RESET "\n");
+    fprintf(stderr, "    " COLOR_CYAN "–ò–º–µ–Ω–æ–≤–∞–Ω–Ω—ã–µ –≥—Ä—É–ø–ø—ã: Name: John, Age: 30 -> 30 years, name=John" COLOR_RESET "\n");
+    fprintf(stderr, "  %s file.txt \"'hello':'HELLO'/i\"\n", argv[0]);
+    fprintf(stderr, "    " COLOR_CYAN "Case-insensitive: hello, Hello, HELLO -> HELLO" COLOR_RESET "\n");
+    fprintf(stderr, "    " COLOR_CYAN "–ë–µ–∑ —É—á—ë—Ç–∞ —Ä–µ–≥–∏—Å—Ç—Ä–∞: hello, Hello, HELLO -> HELLO" COLOR_RESET "\n");
     getchar();
     return 1;
   }
@@ -2426,6 +2624,9 @@ int main(int argc, char* argv[]) {
             fprintf(stderr, "%02X ", operations[i].replace_bytes[j]);
           }
           if (operations[i].replace_len > 20) fprintf(stderr, "...");
+        }
+        if (operations[i].ignore_case) {
+          fprintf(stderr, " " COLOR_CYAN "[/i case-insensitive]" COLOR_RESET);
         }
         fprintf(stderr, "\n");
 
