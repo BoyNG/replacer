@@ -163,15 +163,34 @@ replacer --backup file.txt "old":"new"
 
 ### 7. Dry-run / Preview mode / Режим предварительного просмотра
 **Priority: High / Приоритет: Высокий**
+**Status: COMPLETED / Статус: ЗАВЕРШЕНО**
 
 ```bash
-replacer -n file.txt "old":"new"
-replacer --dry-run file.txt "old":"new"
+replacer -t file.txt "'old':'new'"
+replacer --test file.txt "'old':'new'"
 ```
 **English:** Show what would be replaced without modifying file  
 **Русский:** Показать что будет заменено, но не менять файл
 
 **Output format:**
+```
+Operation 1: Literal pattern [case-insensitive]
+  Line 5: "This is old text"
+  Line 12: "old value"
+  Matches found: 2
+---
+Total matches: 2
+No changes were made (test mode)
+```
+
+**Implementation notes:**
+- Add `-t` or `--test` flag as first argument
+- Created `preview_operations()` function to find matches without modifying
+- Shows line numbers and context for each match
+- Shows operation type (literal/wildcard) and flags (case-insensitive)
+- Displays summary of total matches
+- File is never modified in test mode
+- Completed in version 26.0424
 ```
 Line 5: "This is old text" -> "This is new text"
 Line 12: "old value" -> "new value"
@@ -576,5 +595,5 @@ replacer.exe "file.txt":- "'colo\*\x72':'change color'"
 
 ---
 
-**Version:** 26.0422  
-**Last updated:** 2026-04-22
+**Version:** 26.0424  
+**Last updated:** 2026-04-24

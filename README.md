@@ -3,13 +3,14 @@
 **File content search and replace utility with encoding conversion**  
 **Утилита поиска и замены содержимого файлов с конвертацией кодировок**
 
-Version 26.0422 by BoyNG (Vyacheslav Burnosov)
+Version 26.0424 by BoyNG (Vyacheslav Burnosov)
 
 ---
 
 ## Table of Contents / Содержание
 
 - [What's New / Что нового](#whats-new--что-нового)
+  - [New in 26.0424](#new-in-260424--новое-в-версии-260424)
   - [New in 26.0422](#new-in-260422--новое-в-версии-260422)
   - [New in 26.0421](#new-in-260421--новое-в-версии-260421)
   - [New in 26.0419](#new-in-260419--новое-в-версии-260419)
@@ -42,6 +43,20 @@ Version 26.0422 by BoyNG (Vyacheslav Burnosov)
 ## What's New / Что нового
 
 ## What's New / Что нового
+
+### New in 26.0424 / Новое в версии 26.0424
+
+**English:**
+- **Test mode**: Use `-t` or `--test` flag to preview changes without modifying files
+- **Match preview**: Shows line numbers and context for each match
+- **Safe testing**: Test complex patterns before applying them to important files
+- **Operation details**: Displays pattern type and flags for each operation
+
+**Русский:**
+- **Тестовый режим**: Используйте флаг `-t` или `--test` для просмотра изменений без модификации файлов
+- **Предпросмотр совпадений**: Показывает номера строк и контекст для каждого совпадения
+- **Безопасное тестирование**: Тестируйте сложные паттерны перед применением к важным файлам
+- **Детали операций**: Отображает тип паттерна и флаги для каждой операции
 
 ### New in 26.0422 / Новое в версии 26.0422
 

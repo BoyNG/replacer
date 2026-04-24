@@ -1790,6 +1790,224 @@ int build_replacement_with_captures(const char* template,
   return 1;
 }
 
+// Forward declaration
+int apply_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
+                     int op_count, unsigned char** result, size_t* result_size,
+                     int* total_replacements);
+
+// Preview operations without modifying data (dry-run mode)
+int preview_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
+                       int op_count, int* total_matches) {
+  *total_matches = 0;
+
+  // Work with a copy to simulate sequential operations
+  unsigned char* current = (unsigned char*)malloc(buffer_size);
+  if (!current) return 0;
+  memcpy(current, buffer, buffer_size);
+  size_t current_size = buffer_size;
+
+  // Process each operation sequentially
+  for (int op_idx = 0; op_idx < op_count; op_idx++) {
+    Operation* op = &ops[op_idx];
+    int matches = 0;
+
+    // Find line boundaries for context display
+    size_t* line_starts = (size_t*)malloc(sizeof(size_t) * (current_size + 1));
+    if (!line_starts) {
+      free(current);
+      return 0;
+    }
+
+    int line_count = 0;
+    line_starts[line_count++] = 0;
+    for (size_t i = 0; i < current_size; i++) {
+      if (current[i] == '\n' && i + 1 < current_size) {
+        line_starts[line_count++] = i + 1;
+      }
+    }
+
+    fprintf(stderr, COLOR_YELLOW "Operation %d:" COLOR_RESET " ", op_idx + 1);
+    if (op->pattern_type == PATTERN_LITERAL) {
+      fprintf(stderr, "Literal pattern: \"");
+      for (size_t i = 0; i < op->search_len && i < 30; i++) {
+        if (op->search_bytes[i] >= 32 && op->search_bytes[i] < 127) {
+          fputc(op->search_bytes[i], stderr);
+        } else {
+          fprintf(stderr, "\\x%02X", op->search_bytes[i]);
+        }
+      }
+      if (op->search_len > 30) fprintf(stderr, "...");
+      fprintf(stderr, "\"");
+    } else {
+      fprintf(stderr, "Wildcard pattern");
+    }
+    if (op->ignore_case) {
+      fprintf(stderr, " " COLOR_CYAN "[case-insensitive]" COLOR_RESET);
+    }
+
+    // Show replacement
+    fprintf(stderr, " -> ");
+    if (op->delete_mode) {
+      fprintf(stderr, COLOR_RED "DELETE" COLOR_RESET);
+    } else if (op->has_captures_in_replace) {
+      fprintf(stderr, COLOR_GREEN "\"");
+      if (op->replace_template) {
+        // Show template with capture references
+        for (const char* p = op->replace_template; *p && (p - op->replace_template) < 30; p++) {
+          if (*p == '"' || *p == '\'') continue;  // Skip quotes
+          fputc(*p, stderr);
+        }
+        if (strlen(op->replace_template) > 30) fprintf(stderr, "...");
+      }
+      fprintf(stderr, "\"" COLOR_RESET);
+    } else {
+      fprintf(stderr, COLOR_GREEN "\"");
+      for (size_t i = 0; i < op->replace_len && i < 30; i++) {
+        if (op->replace_bytes[i] >= 32 && op->replace_bytes[i] < 127) {
+          fputc(op->replace_bytes[i], stderr);
+        } else {
+          fprintf(stderr, "\\x%02X", op->replace_bytes[i]);
+        }
+      }
+      if (op->replace_len > 30) fprintf(stderr, "...");
+      fprintf(stderr, "\"" COLOR_RESET);
+    }
+    fprintf(stderr, "\n");
+
+    // Collect all matches for this operation
+    typedef struct {
+      size_t pos;
+      size_t len;
+      int line_num;
+    } MatchInfo;
+
+    MatchInfo* match_list = (MatchInfo*)malloc(sizeof(MatchInfo) * 1000);
+    if (!match_list) {
+      free(line_starts);
+      free(current);
+      return 0;
+    }
+    int match_count = 0;
+
+    // Find all matches
+    size_t i = 0;
+    while (i < current_size && match_count < 1000) {
+      size_t match_pos = i;
+      size_t match_len = 0;
+
+      if (op->pattern_type == PATTERN_LITERAL) {
+        if (i + op->search_len <= current_size) {
+          int match = 0;
+          if (op->ignore_case) {
+            match = 1;
+            for (size_t j = 0; j < op->search_len; j++) {
+              if (tolower(current[i + j]) != tolower(op->search_bytes[j])) {
+                match = 0;
+                break;
+              }
+            }
+          } else {
+            match = (memcmp(current + i, op->search_bytes, op->search_len) == 0);
+          }
+          if (match) match_len = op->search_len;
+        }
+      } else {
+        CaptureContext captures = {0};
+        captures.entire_match.data = current + i;
+        for (int ng = 0; ng < op->defined_group_count; ng++) {
+          captures.named_groups[ng] = op->defined_groups[ng];
+        }
+        captures.named_group_count = op->defined_group_count;
+        match_len = match_pattern_with_captures(current, current_size, op->segments,
+                                                op->segment_count, i, &captures, op->ignore_case);
+      }
+
+      if (match_len > 0) {
+        // Find line number
+        int line_num = 0;
+        for (int l = 0; l < line_count; l++) {
+          if (line_starts[l] <= match_pos) {
+            line_num = l + 1;
+          } else {
+            break;
+          }
+        }
+
+        match_list[match_count].pos = match_pos;
+        match_list[match_count].len = match_len;
+        match_list[match_count].line_num = line_num;
+        match_count++;
+        matches++;
+        i += match_len;
+      } else {
+        i++;
+      }
+    }
+
+    // Display matches with inverted colors
+    for (int m = 0; m < match_count; m++) {
+      size_t match_pos = match_list[m].pos;
+      size_t match_len = match_list[m].len;
+      int line_num = match_list[m].line_num;
+
+      size_t line_start = line_starts[line_num - 1];
+      size_t line_end = (line_num < line_count) ? line_starts[line_num] - 1 : current_size;
+      if (line_end > 0 && current[line_end - 1] == '\n') line_end--;
+
+      fprintf(stderr, "  Line %d: \"", line_num);
+
+      // Print line with inverted match
+      for (size_t p = line_start; p < line_end && p < line_start + 80; p++) {
+        // Start inversion at match beginning
+        if (p == match_pos) {
+          fprintf(stderr, "\033[7m");  // Inverted colors
+        }
+
+        if (current[p] >= 32 && current[p] < 127) {
+          fputc(current[p], stderr);
+        } else if (current[p] == '\t') {
+          fputc('\t', stderr);
+        } else {
+          fprintf(stderr, "\\x%02X", current[p]);
+        }
+
+        // End inversion at match end
+        if (p == match_pos + match_len - 1) {
+          fprintf(stderr, "\033[0m");  // Reset colors
+        }
+      }
+      fprintf(stderr, "\033[0m");  // Ensure reset
+      if (line_end > line_start + 80) fprintf(stderr, "...");
+      fprintf(stderr, "\"\n");
+    }
+
+    fprintf(stderr, "  " COLOR_GREEN "Matches found: %d" COLOR_RESET "\n\n", matches);
+    *total_matches += matches;
+
+    free(match_list);
+    free(line_starts);
+
+    // Apply this operation to current buffer for next operation
+    if (op_idx < op_count - 1) {
+      unsigned char* temp_result = NULL;
+      size_t temp_size = 0;
+      int temp_replacements = 0;
+
+      if (!apply_operations(current, current_size, op, 1, &temp_result, &temp_size, &temp_replacements)) {
+        free(current);
+        return 0;
+      }
+
+      free(current);
+      current = temp_result;
+      current_size = temp_size;
+    }
+  }
+
+  free(current);
+  return 1;
+}
+
 int apply_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
                      int op_count, unsigned char** result, size_t* result_size,
                      int* total_replacements) {
@@ -2257,12 +2475,25 @@ int main(int argc, char* argv[]) {
   dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
   SetConsoleMode(hOut, dwMode);
 
-  // Check for -d debug flag
+  // Check for -d debug flag and -t test flag
   int debug_mode = 0;
+  int dry_run_mode = 0;
   int arg_offset = 0;
-  if (argc >= 2 && strcmp(argv[1], "-d") == 0) {
-    debug_mode = 1;
-    arg_offset = 1;
+
+  // Check first two arguments for flags (can be combined)
+  for (int i = 1; i < argc && i <= 2; i++) {
+    if (strcmp(argv[i], "-d") == 0) {
+      debug_mode = 1;
+      arg_offset++;
+    } else if (strcmp(argv[i], "-t") == 0 || strcmp(argv[i], "--test") == 0) {
+      dry_run_mode = 1;
+      arg_offset++;
+    } else {
+      break;  // Not a flag, stop checking
+    }
+  }
+
+  if (debug_mode) {
     fprintf(stderr, COLOR_CYAN "=== DEBUG MODE ===" COLOR_RESET "\n\n");
 
     // Print command line arguments
@@ -2274,9 +2505,14 @@ int main(int argc, char* argv[]) {
     fprintf(stderr, "\n");
   }
 
+  if (dry_run_mode) {
+    fprintf(stderr, COLOR_CYAN "=== TEST MODE (Preview) ===" COLOR_RESET "\n");
+    fprintf(stderr, COLOR_YELLOW "No changes will be made to files" COLOR_RESET "\n\n");
+  }
+
   if (argc < 2 + arg_offset) {
     fprintf(stderr,
-            "\n" COLOR_YELLOW "REPLACER " COLOR_YELLOW "v26.0422 - " COLOR_CYAN
+            "\n" COLOR_YELLOW "REPLACER " COLOR_YELLOW "v26.0424 - " COLOR_CYAN
             "File content search and replace utility with encoding "
             "conversion" COLOR_RESET "\n");
     fprintf(stderr,
@@ -2285,7 +2521,7 @@ int main(int argc, char* argv[]) {
     fprintf(stderr, "(By BoyNG - \nVyacheslav Burnosov)\n\n\n");
     fprintf(stderr,
             COLOR_YELLOW "Usage / Использование:" COLOR_RESET " %s " COLOR_GREEN
-                         "[-d] [encoding:]<input>[:[encoding][:output]]" COLOR_RESET
+                         "[-d] [-t] [encoding:]<input>[:[encoding][:output]]" COLOR_RESET
                          " [operations...]\n\n",
             argv[0]);
 
@@ -2476,6 +2712,16 @@ int main(int argc, char* argv[]) {
             "                                ссылка на именованную группу в замене\n");
 
     fprintf(stderr, "\n" COLOR_YELLOW "Flags / Флаги:" COLOR_RESET "\n");
+    fprintf(stderr, "  " COLOR_GREEN "-d" COLOR_RESET
+                    "                          - " COLOR_CYAN
+                    "debug mode (show detailed processing info)" COLOR_RESET "\n");
+    fprintf(stderr,
+            "                                режим отладки (показать детальную информацию)\n");
+    fprintf(stderr, "  " COLOR_GREEN "-t, --test" COLOR_RESET
+                    "                    - " COLOR_CYAN
+                    "test mode (show changes without modifying)" COLOR_RESET "\n");
+    fprintf(stderr,
+            "                                тестовый режим (показать изменения без модификации)\n");
     fprintf(stderr, "  " COLOR_GREEN "/i" COLOR_RESET
                     "                          - " COLOR_CYAN
                     "case-insensitive search (add at end of operation)" COLOR_RESET "\n");
@@ -2769,6 +3015,31 @@ int main(int argc, char* argv[]) {
   int total_replacements = 0;
 
   if (op_count > 0) {
+    if (dry_run_mode) {
+      // Dry-run mode: preview changes without modifying
+      int total_matches = 0;
+      if (!preview_operations(buffer, buffer_size, operations, op_count, &total_matches)) {
+        fprintf(stderr, "Error: Failed to preview operations\n");
+        free(buffer);
+        for (int i = 0; i < op_count; i++) free_operation(&operations[i]);
+        free(operations);
+        if (input_file) free(input_file);
+        if (output_file) free(output_file);
+        return 1;
+      }
+
+      fprintf(stderr, COLOR_CYAN "=== PREVIEW SUMMARY ===" COLOR_RESET "\n");
+      fprintf(stderr, COLOR_YELLOW "Total matches: %d" COLOR_RESET "\n", total_matches);
+      fprintf(stderr, COLOR_GREEN "No changes were made (test mode)" COLOR_RESET "\n");
+
+      free(buffer);
+      for (int i = 0; i < op_count; i++) free_operation(&operations[i]);
+      free(operations);
+      if (input_file) free(input_file);
+      if (output_file) free(output_file);
+      return 0;
+    }
+
     if (!apply_operations(buffer, buffer_size, operations, op_count, &result,
                           &result_size, &total_replacements)) {
       fprintf(stderr, "Error: Failed to apply operations\n");
