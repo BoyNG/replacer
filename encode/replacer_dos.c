@@ -1289,8 +1289,8 @@ int parse_concatenated_input_with_captures(
 // Parse encoding specification: "input@output", "input@", "@output"
 int parse_encoding_spec(const char* spec, Encoding* input_enc,
                         Encoding* output_enc) {
-  // Don't reset defaults - preserve values passed by caller
-  // Caller sets defaults (DOS-866), we only override if specified
+  *input_enc = ENCODING_UTF8;
+  *output_enc = ENCODING_UTF8;
 
   if (!spec || strlen(spec) == 0) {
     return 1;  // No encoding specified, use defaults
@@ -1316,7 +1316,6 @@ int parse_encoding_spec(const char* spec, Encoding* input_enc,
       return 0;
     }
   }
-  // If input_len == 0 (e.g., "@win"), input_enc keeps default value
 
   // Parse output encoding (after @)
   const char* output_str = at + 1;
@@ -1328,7 +1327,6 @@ int parse_encoding_spec(const char* spec, Encoding* input_enc,
       return 0;
     }
   }
-  // If output_str is empty (e.g., "win@"), output_enc keeps default value
 
   return 1;
 }
@@ -2029,12 +2027,11 @@ int build_replacement_with_captures(const char* template,
 // Forward declaration
 int apply_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
                      int op_count, unsigned char** result, size_t* result_size,
-                     int* total_replacements, Encoding input_enc);
+                     int* total_replacements);
 
 // Preview operations without modifying data (dry-run mode)
 int preview_operations(unsigned char* buffer, size_t buffer_size,
-                       Operation* ops, int op_count, int* total_matches,
-                       Encoding input_enc) {
+                       Operation* ops, int op_count, int* total_matches) {
   *total_matches = 0;
 
   // Work with a copy to simulate sequential operations
@@ -2236,7 +2233,7 @@ int preview_operations(unsigned char* buffer, size_t buffer_size,
       int temp_replacements = 0;
 
       if (!apply_operations(current, current_size, op, 1, &temp_result,
-                            &temp_size, &temp_replacements, input_enc)) {
+                            &temp_size, &temp_replacements)) {
         free(current);
         return 0;
       }
@@ -2253,7 +2250,7 @@ int preview_operations(unsigned char* buffer, size_t buffer_size,
 
 int apply_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
                      int op_count, unsigned char** result, size_t* result_size,
-                     int* total_replacements, Encoding input_enc) {
+                     int* total_replacements) {
   unsigned char* current = buffer;
   size_t current_size = buffer_size;
   *total_replacements = 0;
@@ -2305,7 +2302,7 @@ int apply_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
                 unsigned char* replacement = NULL;
                 size_t replacement_len = 0;
                 if (build_replacement_with_captures(
-                        op->replace_template, &captures, input_enc,
+                        op->replace_template, &captures, ENCODING_UTF8,
                         &replacement, &replacement_len,
                         op->has_counter ? &op->counter_format : NULL,
                         counter_value)) {
@@ -2855,7 +2852,7 @@ int main(int argc, char* argv[]) {
 
   if (argc < 2 + arg_offset) {
     fprintf(stderr,
-            "\n" COLOR_YELLOW "REPLACER " COLOR_YELLOW "v26.0426 - " COLOR_CYAN
+            "\n" COLOR_YELLOW "REPLACER " COLOR_YELLOW "v26.0425a - " COLOR_CYAN
             "File content search and replace utility with encoding "
             "conversion" COLOR_RESET "\n");
     fprintf(stderr,
@@ -3290,42 +3287,8 @@ int main(int argc, char* argv[]) {
               operations[i].replace_len = converted_replace_len;
             }
           }
-        } else if (operations[i].pattern_type == PATTERN_WILDCARD) {
-          // Convert wildcard segments (literal parts only)
-          for (int j = 0; j < operations[i].segment_count; j++) {
-            if (!operations[i].segments[j].is_wildcard &&
-                operations[i].segments[j].bytes != NULL &&
-                operations[i].segments[j].len > 0) {
-              // Convert this literal segment
-              unsigned char* converted = NULL;
-              size_t converted_len = 0;
-              if (apply_encoding_conversion(
-                    operations[i].segments[j].bytes,
-                    operations[i].segments[j].len,
-                    ENCODING_DOS866, input_enc,
-                    &converted, &converted_len)) {
-                free(operations[i].segments[j].bytes);
-                operations[i].segments[j].bytes = converted;
-                operations[i].segments[j].len = converted_len;
-              }
-            }
-          }
-
-          // Convert replace bytes for wildcard patterns (if not delete mode and no captures)
-          if (!operations[i].delete_mode && !operations[i].has_captures_in_replace &&
-              operations[i].replace_bytes != NULL && operations[i].replace_len > 0) {
-            unsigned char* converted_replace = NULL;
-            size_t converted_replace_len = 0;
-            if (apply_encoding_conversion(operations[i].replace_bytes,
-                                          operations[i].replace_len,
-                                          ENCODING_DOS866, input_enc,
-                                          &converted_replace, &converted_replace_len)) {
-              free(operations[i].replace_bytes);
-              operations[i].replace_bytes = converted_replace;
-              operations[i].replace_len = converted_replace_len;
-            }
-          }
         }
+        // TODO: Convert wildcard segments if needed
       }
     }
 
@@ -3498,7 +3461,7 @@ int main(int argc, char* argv[]) {
       // Dry-run mode: preview changes without modifying
       int total_matches = 0;
       if (!preview_operations(buffer, buffer_size, operations, op_count,
-                              &total_matches, input_enc)) {
+                              &total_matches)) {
         fprintf(stderr, "Error: Failed to preview operations\n");
         free(buffer);
         for (int i = 0; i < op_count; i++) free_operation(&operations[i]);
@@ -3523,7 +3486,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (!apply_operations(buffer, buffer_size, operations, op_count, &result,
-                          &result_size, &total_replacements, input_enc)) {
+                          &result_size, &total_replacements)) {
       fprintf(stderr, "Error: Failed to apply operations\n");
       free(buffer);
       for (int i = 0; i < op_count; i++) free_operation(&operations[i]);

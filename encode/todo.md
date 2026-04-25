@@ -611,29 +611,10 @@ replacer.exe "file.txt":- "'colo\*\x72':'change color'"
 
 ---
 
-**Version:** 26.0426  
-**Last updated:** 2026-04-26
+**Version:** 26.0424b  
+**Last updated:** 2026-04-24
 
 ## Changelog / История изменений
-
-### v26.0426 (2026-04-26)
-- **Fixed encoding conversion bugs**: Critical fixes for wildcard and capture groups
-  - Wildcard segments now convert correctly between encodings
-  - Capture groups use correct file encoding (not hardcoded UTF-8)
-  - Replacement strings in wildcard patterns convert properly
-  - Fixed `parse_encoding_spec()` not preserving defaults
-- **Improved encoding architecture**: Two-level encoding system works correctly
-  - Operation-level encoding: `'text':'replacement'@utf` (encoding for operation text)
-  - File-level encoding: `@utf` or `dos@utf` (encoding for file conversion)
-  - Mixed operations supported: `0xAA:'text'@utf` (hex search, UTF-8 replacement)
-- **All encoding conversions now work**: DOS-866, WIN-1251, UTF-8, KOI8-R
-  - Wildcard patterns with Cyrillic: `'Начало'+*+'Конец'` works in any encoding
-  - Capture groups with Cyrillic: `'['+{*}+'] '+{*}:'\2 (\1)'` preserves text correctly
-  - File conversion with operations: `@utf 0xAA:0xFF` converts file AND replaces bytes
-
-### v26.0425 (2026-04-25)
-- **Auto-increment counters**: `{#}`, `{#:001}`, `{#:A}`, `{#:0x01}`, etc.
-- Counter formats: decimal, zero-padded, hex, alphabetic, ranges
 
 ### v26.0424d (2026-04-24)
 - **Fixed binary mode**: Hex-only operations skip encoding conversion
@@ -649,6 +630,10 @@ replacer.exe "file.txt":- "'colo\*\x72':'change color'"
 - **Simplified encoding syntax**: Encodings as separate parameter `"input@output"`
 - **Cleaner file specification**: `file.txt:output.txt "win@dos"` instead of `win:file.txt:dos:output.txt`
 - **Fixed stdin/stdout syntax**: `-:-` (no more `::` confusion)
+
+### v26.0425 (2026-04-25)
+- **Auto-increment counters**: `{#}`, `{#:001}`, `{#:A}`, `{#:0x01}`, etc.
+- Counter formats: decimal, zero-padded, hex, alphabetic, ranges
 
 ### v26.0424 (2026-04-24)
 - **Test mode**: `-t` or `--test` flag for preview

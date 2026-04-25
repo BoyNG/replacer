@@ -3,7 +3,7 @@
 **File content search and replace utility with encoding conversion**  
 **Утилита поиска и замены содержимого файлов с конвертацией кодировок**
 
-Version 26.0426 by BoyNG (Vyacheslav Burnosov)
+Version 26.0424d by BoyNG (Vyacheslav Burnosov)
 
 ---
 
@@ -47,30 +47,6 @@ Version 26.0426 by BoyNG (Vyacheslav Burnosov)
 ---
 
 ## What's New / Что нового
-
-### New in 26.0426 / Новое в версии 26.0426
-
-**English:**
-- **Fixed critical encoding conversion bugs**: All wildcard and capture group encoding issues resolved
-  - Wildcard segments now convert correctly between encodings (e.g., `'Начало'+*+'Конец'` works in WIN-1251/UTF-8 files)
-  - Capture groups preserve Cyrillic text correctly (no more garbage characters)
-  - Replacement strings in wildcard patterns convert properly
-  - Fixed `parse_encoding_spec()` default reset bug (`@win` now correctly means `dos@win`, not `utf@win`)
-- **Improved encoding architecture**: Two-level encoding system clarified
-  - Operation-level: `'text':'replacement'@utf` (encoding for operation text)
-  - File-level: `@utf` or `dos@utf` (encoding for file conversion)
-  - Mixed operations fully supported: `0xAA:'text'@utf` (hex search, UTF-8 replacement)
-
-**Русский:**
-- **Исправлены критические баги конвертации кодировок**: Все проблемы с wildcard и capture groups решены
-  - Wildcard сегменты теперь корректно конвертируются между кодировками (например, `'Начало'+*+'Конец'` работает в файлах WIN-1251/UTF-8)
-  - Capture groups корректно сохраняют кириллический текст (больше никаких кракозябр)
-  - Строки замены в wildcard паттернах конвертируются правильно
-  - Исправлен баг сброса defaults в `parse_encoding_spec()` (`@win` теперь корректно означает `dos@win`, а не `utf@win`)
-- **Улучшена архитектура кодировок**: Двухуровневая система кодировок уточнена
-  - Уровень операции: `'текст':'замена'@utf` (кодировка для текста операции)
-  - Уровень файла: `@utf` или `dos@utf` (кодировка для конвертации файла)
-  - Смешанные операции полностью поддерживаются: `0xAA:'текст'@utf` (hex поиск, UTF-8 замена)
 
 ### New in 26.0424d / Новое в версии 26.0424d
 

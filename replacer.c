@@ -37,7 +37,7 @@ typedef enum {
 // Named group mapping
 typedef struct {
   char name[MAX_GROUP_NAME_LEN + 1];  // Group name
-  int index;                           // Index in captures array
+  int index;                          // Index in captures array
 } NamedGroup;
 
 typedef struct {
@@ -45,9 +45,10 @@ typedef struct {
   WildcardType wildcard_type;
   unsigned char* bytes;
   size_t len;
-  int is_capture_group;                    // NEW: 1 if this segment is in {...}
-  int capture_group_index;                 // NEW: Index in captures[] (-1 if not a group)
-  char group_name[MAX_GROUP_NAME_LEN + 1]; // NEW: Group name (empty if numbered)
+  int is_capture_group;     // NEW: 1 if this segment is in {...}
+  int capture_group_index;  // NEW: Index in captures[] (-1 if not a group)
+  char group_name[MAX_GROUP_NAME_LEN +
+                  1];  // NEW: Group name (empty if numbered)
 } PatternSegment;
 
 // Capture structures
@@ -57,12 +58,31 @@ typedef struct {
 } CapturedSegment;
 
 typedef struct {
-  CapturedSegment entire_match;                 // \0
-  CapturedSegment captures[MAX_CAPTURE_GROUPS]; // NEW: All captures (numbered + named)
-  int capture_count;                            // NEW: Total number of captures
+  CapturedSegment entire_match;  // \0
+  CapturedSegment
+      captures[MAX_CAPTURE_GROUPS];  // NEW: All captures (numbered + named)
+  int capture_count;                 // NEW: Total number of captures
   NamedGroup named_groups[MAX_CAPTURE_GROUPS];  // NEW: Name to index mapping
   int named_group_count;                        // NEW: Number of named groups
 } CaptureContext;
+
+// Counter format types
+typedef enum {
+  COUNTER_NONE = 0,      // No counter
+  COUNTER_DECIMAL,       // 1, 2, 3...
+  COUNTER_DECIMAL_ZERO,  // 001, 002, 003...
+  COUNTER_HEX,           // 0x01, 0x02... 0x0a, 0x0b
+  COUNTER_ALPHA_UPPER,   // A, B, C... Z, AA, AB...
+  COUNTER_ALPHA_LOWER    // a, b, c... z, aa, ab...
+} CounterType;
+
+typedef struct {
+  CounterType type;
+  int start;      // Starting value (default 1)
+  int end;        // Ending value (-1 = no limit)
+  int width;      // Width for zero-padding (0 = no padding)
+  int hex_width;  // Width for hex (from 0x01 -> 2, 0x0001 -> 4)
+} CounterFormat;
 
 typedef struct {
   unsigned char* search_bytes;
@@ -77,8 +97,9 @@ typedef struct {
   int segment_count;
 
   // Fields for capture support
-  int has_captures_in_replace;  // 1 if replace string contains \0, \1, {name}, etc.
-  char* replace_template;       // Original replace string with \0, \1, {name}...
+  int has_captures_in_replace;  // 1 if replace string contains \0, \1, {name},
+                                // etc.
+  char* replace_template;  // Original replace string with \0, \1, {name}...
 
   // NEW: Named groups defined in search pattern
   NamedGroup defined_groups[MAX_CAPTURE_GROUPS];
@@ -86,6 +107,10 @@ typedef struct {
 
   // NEW: Case-insensitive flag
   int ignore_case;  // 1 if /i flag is present
+
+  // NEW: Counter support
+  CounterFormat counter_format;
+  int has_counter;  // 1 if replacement contains {#...}
 } Operation;
 
 // ============================================================================
@@ -108,36 +133,30 @@ void print_error_str(const char* msg_en, const char* msg_ru, const char* str) {
 }
 
 void print_error_char(const char* msg_en, const char* msg_ru, char c, int pos) {
-  fprintf(stderr, COLOR_RED "Error: " COLOR_RESET "%s '%c' at position %d\n", msg_en, c, pos);
-  fprintf(stderr, COLOR_RED "Ошибка: " COLOR_RESET "%s '%c' в позиции %d\n", msg_ru, c, pos);
+  fprintf(stderr, COLOR_RED "Error: " COLOR_RESET "%s '%c' at position %d\n",
+          msg_en, c, pos);
+  fprintf(stderr, COLOR_RED "Ошибка: " COLOR_RESET "%s '%c' в позиции %d\n",
+          msg_ru, c, pos);
 }
 
 // Validate group name: [a-zA-Z][a-zA-Z0-9_]*, max 32 chars
 int validate_group_name(const char* name, int len, int pos) {
   if (len == 0) {
-    print_error_pos(
-      "Empty capture group name '{:...}' at position",
-      "Пустое имя группы захвата '{:...}' в позиции",
-      pos
-    );
+    print_error_pos("Empty capture group name '{:...}' at position",
+                    "Пустое имя группы захвата '{:...}' в позиции", pos);
     return 0;
   }
 
   if (len > MAX_GROUP_NAME_LEN) {
     print_error_pos(
-      "Group name too long (max 32 characters) at position",
-      "Слишком длинное имя группы (максимум 32 символа) в позиции",
-      pos
-    );
+        "Group name too long (max 32 characters) at position",
+        "Слишком длинное имя группы (максимум 32 символа) в позиции", pos);
     return 0;
   }
 
   if (!isalpha((unsigned char)name[0])) {
-    print_error_pos(
-      "Group name must start with a letter at position",
-      "Имя группы должно начинаться с буквы в позиции",
-      pos
-    );
+    print_error_pos("Group name must start with a letter at position",
+                    "Имя группы должно начинаться с буквы в позиции", pos);
     return 0;
   }
 
@@ -145,15 +164,185 @@ int validate_group_name(const char* name, int len, int pos) {
     char c = name[i];
     if (!isalnum((unsigned char)c) && c != '_') {
       print_error_char(
-        "Invalid character in group name (use only: a-z, A-Z, 0-9, _)",
-        "Недопустимый символ в имени группы (используйте только: a-z, A-Z, 0-9, _)",
-        c, pos + i
-      );
+          "Invalid character in group name (use only: a-z, A-Z, 0-9, _)",
+          "Недопустимый символ в имени группы (используйте только: a-z, A-Z, "
+          "0-9, _)",
+          c, pos + i);
       return 0;
     }
   }
 
   return 1;
+}
+
+// Parse counter format from {#:params}
+// Examples: {#}, {#:5}, {#:03-05}, {#:001}, {#:0x01}, {#:A}, {#:a}
+int parse_counter_format(const char* params, int params_len,
+                         CounterFormat* format) {
+  // Initialize defaults
+  format->type = COUNTER_DECIMAL;
+  format->start = 1;
+  format->end = -1;   // No limit
+  format->width = 0;  // No padding
+  format->hex_width = 0;
+
+  if (params_len == 0) {
+    // {#} - simple counter
+    return 1;
+  }
+
+  // Check for hex format: 0x...
+  if (params_len >= 3 && params[0] == '0' &&
+      (params[1] == 'x' || params[1] == 'X')) {
+    format->type = COUNTER_HEX;
+    format->hex_width = params_len - 2;  // Width from hex digits
+
+    // Parse starting value
+    char hex_str[32] = {0};
+    strncpy(hex_str, params + 2, params_len - 2);
+    format->start = (int)strtol(hex_str, NULL, 16);
+    if (format->start == 0) format->start = 1;
+    return 1;
+  }
+
+  // Check for alpha format: A or a
+  if (params_len == 1 && isalpha(params[0])) {
+    if (isupper(params[0])) {
+      format->type = COUNTER_ALPHA_UPPER;
+      format->start = params[0] - 'A' + 1;  // A=1, B=2, etc.
+    } else {
+      format->type = COUNTER_ALPHA_LOWER;
+      format->start = params[0] - 'a' + 1;  // a=1, b=2, etc.
+    }
+    return 1;
+  }
+
+  // Check for range: N-M
+  const char* dash = NULL;
+  for (int i = 0; i < params_len; i++) {
+    if (params[i] == '-' && i > 0) {
+      dash = params + i;
+      break;
+    }
+  }
+
+  if (dash) {
+    // Range format: N-M
+    int start_len = dash - params;
+    int end_len = params_len - start_len - 1;
+
+    char start_str[32] = {0};
+    char end_str[32] = {0};
+    strncpy(start_str, params, start_len);
+    strncpy(end_str, dash + 1, end_len);
+
+    format->start = atoi(start_str);
+    format->end = atoi(end_str);
+
+    // Determine width from start value
+    if (start_str[0] == '0' && start_len > 1) {
+      format->type = COUNTER_DECIMAL_ZERO;
+      format->width = start_len;
+    }
+
+    return 1;
+  }
+
+  // Single number: N or 00N
+  if (isdigit(params[0])) {
+    format->start = atoi(params);
+
+    // Check for leading zeros
+    if (params[0] == '0' && params_len > 1) {
+      format->type = COUNTER_DECIMAL_ZERO;
+      format->width = params_len;
+    }
+
+    return 1;
+  }
+
+  // Unknown format
+  print_error_str("Invalid counter format", "Неверный формат счётчика", params);
+  return 0;
+}
+
+// Format counter value according to format
+// Returns formatted string (caller must free)
+char* format_counter(int value, CounterFormat* format) {
+  char* result = (char*)malloc(64);
+  if (!result) return NULL;
+
+  switch (format->type) {
+    case COUNTER_DECIMAL:
+      sprintf(result, "%d", value);
+      break;
+
+    case COUNTER_DECIMAL_ZERO:
+      if (format->width > 0) {
+        sprintf(result, "%0*d", format->width, value);
+      } else {
+        sprintf(result, "%d", value);
+      }
+      break;
+
+    case COUNTER_HEX:
+      if (format->hex_width > 0) {
+        sprintf(result, "0x%0*x", format->hex_width, value);
+      } else {
+        sprintf(result, "0x%x", value);
+      }
+      break;
+
+    case COUNTER_ALPHA_UPPER: {
+      // Convert number to letters: 1=A, 2=B, ..., 26=Z, 27=AA, 28=AB...
+      int pos = 0;
+      int n = value;
+      char temp[32];
+
+      if (n <= 0) n = 1;
+
+      while (n > 0) {
+        int rem = (n - 1) % 26;
+        temp[pos++] = 'A' + rem;
+        n = (n - 1) / 26;
+      }
+
+      // Reverse
+      for (int i = 0; i < pos; i++) {
+        result[i] = temp[pos - 1 - i];
+      }
+      result[pos] = '\0';
+      break;
+    }
+
+    case COUNTER_ALPHA_LOWER: {
+      // Same as upper but lowercase
+      int pos = 0;
+      int n = value;
+      char temp[32];
+
+      if (n <= 0) n = 1;
+
+      while (n > 0) {
+        int rem = (n - 1) % 26;
+        temp[pos++] = 'a' + rem;
+        n = (n - 1) / 26;
+      }
+
+      // Reverse
+      for (int i = 0; i < pos; i++) {
+        result[i] = temp[pos - 1 - i];
+      }
+      result[pos] = '\0';
+      break;
+    }
+
+    default:
+      sprintf(result, "%d", value);
+      break;
+  }
+
+  return result;
 }
 
 // ============================================================================
@@ -183,6 +372,7 @@ Encoding parse_encoding(const char* enc_str) {
   if (!enc_str) return ENCODING_UTF8;
   if (strcmp(enc_str, "win") == 0) return ENCODING_WIN1251;
   if (strcmp(enc_str, "dos") == 0) return ENCODING_DOS866;
+  if (strcmp(enc_str, "raw") == 0) return ENCODING_DOS866;  // raw = dos (no conversion)
   if (strcmp(enc_str, "koi") == 0) return ENCODING_KOI8R;
   if (strcmp(enc_str, "utf") == 0) return ENCODING_UTF8;
   return ENCODING_UTF8;
@@ -344,9 +534,8 @@ int is_hex_format(const char* str) {
 int is_quoted_string(const char* str) {
   size_t len = strlen(str);
   // Support both single and double quotes
-  return (len >= 2 &&
-          ((str[0] == '"' && str[len - 1] == '"') ||
-           (str[0] == '\'' && str[len - 1] == '\'')));
+  return (len >= 2 && ((str[0] == '"' && str[len - 1] == '"') ||
+                       (str[0] == '\'' && str[len - 1] == '\'')));
 }
 
 char* extract_quoted_string(const char* str) {
@@ -446,7 +635,7 @@ int parse_input(const char* input, unsigned char** bytes, size_t* len,
 // Parse text with embedded wildcards: "test\.end" -> segments
 // Returns array of segments and count
 int parse_text_with_wildcards(const char* text, PatternSegment** segments,
-                               int* segment_count, Encoding encoding) {
+                              int* segment_count, Encoding encoding) {
   *segments = NULL;
   *segment_count = 0;
 
@@ -456,7 +645,7 @@ int parse_text_with_wildcards(const char* text, PatternSegment** segments,
     // Check for both escaped and unescaped wildcards
     if ((*p == '.' || *p == '*' || *p == '?') ||
         (*p == '\\' && (p[1] == '.' || p[1] == '*' || p[1] == '?'))) {
-      count += 2;  // literal part + wildcard
+      count += 2;           // literal part + wildcard
       if (*p == '\\') p++;  // skip next char if escaped
     }
   }
@@ -510,7 +699,7 @@ int parse_text_with_wildcards(const char* text, PatternSegment** segments,
         // Convert to bytes
         (*segments)[seg_idx].is_wildcard = 0;
         if (!text_to_bytes(processed, &(*segments)[seg_idx].bytes,
-                          &(*segments)[seg_idx].len, encoding)) {
+                           &(*segments)[seg_idx].len, encoding)) {
           free(processed);
           for (int i = 0; i < seg_idx; i++) {
             if ((*segments)[i].bytes) free((*segments)[i].bytes);
@@ -573,7 +762,7 @@ int parse_text_with_wildcards(const char* text, PatternSegment** segments,
     // Convert to bytes
     (*segments)[seg_idx].is_wildcard = 0;
     if (!text_to_bytes(processed, &(*segments)[seg_idx].bytes,
-                      &(*segments)[seg_idx].len, encoding)) {
+                       &(*segments)[seg_idx].len, encoding)) {
       free(processed);
       for (int i = 0; i < seg_idx; i++) {
         if ((*segments)[i].bytes) free((*segments)[i].bytes);
@@ -601,7 +790,7 @@ int parse_concatenated_input(const char* input, PatternSegment** segments,
   int in_quotes = 0;
   const char* seg_start = input;
 
-  for (const char* p = input; ; p++) {
+  for (const char* p = input;; p++) {
     if (*p == '"' || *p == '\'') in_quotes = !in_quotes;
 
     if ((*p == '+' && !in_quotes) || *p == '\0') {
@@ -617,8 +806,8 @@ int parse_concatenated_input(const char* input, PatternSegment** segments,
       if (seg_len == 2 && segment[0] == '\\' &&
           (segment[1] == '?' || segment[1] == '.' || segment[1] == '*')) {
         is_standalone = 1;
-      } else if (seg_len == 1 &&
-                 (segment[0] == '?' || segment[0] == '.' || segment[0] == '*')) {
+      } else if (seg_len == 1 && (segment[0] == '?' || segment[0] == '.' ||
+                                  segment[0] == '*')) {
         is_standalone = 1;
       }
 
@@ -633,7 +822,8 @@ int parse_concatenated_input(const char* input, PatternSegment** segments,
           // Only count wildcards if not a quoted string
           for (const char* wp = segment; *wp; wp++) {
             if ((*wp == '.' || *wp == '*' || *wp == '?') ||
-                (*wp == '\\' && (wp[1] == '.' || wp[1] == '*' || wp[1] == '?'))) {
+                (*wp == '\\' &&
+                 (wp[1] == '.' || wp[1] == '*' || wp[1] == '?'))) {
               wildcard_count++;
             }
           }
@@ -690,15 +880,21 @@ int parse_concatenated_input(const char* input, PatternSegment** segments,
       if (seg_len == 2 && segment[0] == '\\' &&
           (segment[1] == '?' || segment[1] == '.' || segment[1] == '*')) {
         is_standalone_wildcard = 1;
-        if (segment[1] == '.') wc_type = WILDCARD_ANY_BYTE;
-        else if (segment[1] == '*') wc_type = WILDCARD_ZERO_OR_MORE;
-        else if (segment[1] == '?') wc_type = WILDCARD_OPTIONAL;
-      } else if (seg_len == 1 &&
-                 (segment[0] == '?' || segment[0] == '.' || segment[0] == '*')) {
+        if (segment[1] == '.')
+          wc_type = WILDCARD_ANY_BYTE;
+        else if (segment[1] == '*')
+          wc_type = WILDCARD_ZERO_OR_MORE;
+        else if (segment[1] == '?')
+          wc_type = WILDCARD_OPTIONAL;
+      } else if (seg_len == 1 && (segment[0] == '?' || segment[0] == '.' ||
+                                  segment[0] == '*')) {
         is_standalone_wildcard = 1;
-        if (segment[0] == '.') wc_type = WILDCARD_ANY_BYTE;
-        else if (segment[0] == '*') wc_type = WILDCARD_ZERO_OR_MORE;
-        else if (segment[0] == '?') wc_type = WILDCARD_OPTIONAL;
+        if (segment[0] == '.')
+          wc_type = WILDCARD_ANY_BYTE;
+        else if (segment[0] == '*')
+          wc_type = WILDCARD_ZERO_OR_MORE;
+        else if (segment[0] == '?')
+          wc_type = WILDCARD_OPTIONAL;
       }
 
       if (is_standalone_wildcard) {
@@ -716,7 +912,8 @@ int parse_concatenated_input(const char* input, PatternSegment** segments,
           // Only check for wildcards if not a quoted string
           for (const char* wp = segment; *wp; wp++) {
             if ((*wp == '.' || *wp == '*' || *wp == '?') ||
-                (*wp == '\\' && (wp[1] == '.' || wp[1] == '*' || wp[1] == '?'))) {
+                (*wp == '\\' &&
+                 (wp[1] == '.' || wp[1] == '*' || wp[1] == '?'))) {
               has_wildcards = 1;
               break;
             }
@@ -741,8 +938,8 @@ int parse_concatenated_input(const char* input, PatternSegment** segments,
 
           PatternSegment* sub_segments = NULL;
           int sub_count = 0;
-          if (!parse_text_with_wildcards(text_to_parse, &sub_segments, &sub_count,
-                                         encoding)) {
+          if (!parse_text_with_wildcards(text_to_parse, &sub_segments,
+                                         &sub_count, encoding)) {
             if (text_to_parse != segment) free(text_to_parse);
             free(segment);
             free(input_copy);
@@ -794,12 +991,9 @@ int parse_concatenated_input(const char* input, PatternSegment** segments,
 // ============================================================================
 // NEW: Parse input with capture groups: {pattern} or {name:pattern}
 // ============================================================================
-int parse_concatenated_input_with_captures(const char* input,
-                                           PatternSegment** segments,
-                                           int* segment_count,
-                                           Encoding encoding,
-                                           NamedGroup* defined_groups,
-                                           int* defined_group_count) {
+int parse_concatenated_input_with_captures(
+    const char* input, PatternSegment** segments, int* segment_count,
+    Encoding encoding, NamedGroup* defined_groups, int* defined_group_count) {
   *segments = NULL;
   *segment_count = 0;
   *defined_group_count = 0;
@@ -842,7 +1036,8 @@ int parse_concatenated_input_with_captures(const char* input,
         brace_depth--;
         if (brace_depth == 0 && brace_start) {
           if (brace_count >= MAX_CAPTURE_GROUPS) {
-            print_error("Too many capture groups (max 99)", "Слишком много групп захвата (максимум 99)");
+            print_error("Too many capture groups (max 99)",
+                        "Слишком много групп захвата (максимум 99)");
             return 0;
           }
           brace_positions[brace_count].start_pos = brace_start - input;
@@ -865,13 +1060,16 @@ int parse_concatenated_input_with_captures(const char* input,
   int total_segment_count = 0;
   int total_segment_capacity = 100;
 
-  all_segments = (PatternSegment*)calloc(total_segment_capacity, sizeof(PatternSegment));
+  all_segments =
+      (PatternSegment*)calloc(total_segment_capacity, sizeof(PatternSegment));
   if (!all_segments) return 0;
 
   for (int brace_idx = 0; brace_idx <= brace_count; brace_idx++) {
     // Parse literal part before this brace (or after last brace)
     int literal_start = current_pos;
-    int literal_end = (brace_idx < brace_count) ? brace_positions[brace_idx].start_pos : strlen(input);
+    int literal_end = (brace_idx < brace_count)
+                          ? brace_positions[brace_idx].start_pos
+                          : strlen(input);
 
     if (literal_end > literal_start) {
       // Extract literal part
@@ -891,7 +1089,8 @@ int parse_concatenated_input_with_captures(const char* input,
       PatternSegment* literal_segments = NULL;
       int literal_seg_count = 0;
 
-      if (!parse_concatenated_input(literal, &literal_segments, &literal_seg_count, encoding)) {
+      if (!parse_concatenated_input(literal, &literal_segments,
+                                    &literal_seg_count, encoding)) {
         free(literal);
         for (int i = 0; i < total_segment_count; i++) {
           if (all_segments[i].bytes) free(all_segments[i].bytes);
@@ -904,7 +1103,8 @@ int parse_concatenated_input_with_captures(const char* input,
       for (int i = 0; i < literal_seg_count; i++) {
         if (total_segment_count >= total_segment_capacity) {
           total_segment_capacity *= 2;
-          all_segments = (PatternSegment*)realloc(all_segments, total_segment_capacity * sizeof(PatternSegment));
+          all_segments = (PatternSegment*)realloc(
+              all_segments, total_segment_capacity * sizeof(PatternSegment));
           if (!all_segments) {
             free(literal);
             for (int j = 0; j < literal_seg_count; j++) {
@@ -961,12 +1161,14 @@ int parse_concatenated_input_with_captures(const char* input,
 
         // Check duplicates
         for (int i = 0; i < group_count; i++) {
-          if (groups[i].is_named && strncmp(groups[i].name, group_content, name_len) == 0 &&
+          if (groups[i].is_named &&
+              strncmp(groups[i].name, group_content, name_len) == 0 &&
               groups[i].name[name_len] == '\0') {
             char temp[MAX_GROUP_NAME_LEN + 1];
             strncpy(temp, group_content, name_len);
             temp[name_len] = '\0';
-            print_error_str("Duplicate capture group name", "Дублирующееся имя группы захвата", temp);
+            print_error_str("Duplicate capture group name",
+                            "Дублирующееся имя группы захвата", temp);
             free(group_content);
             for (int i = 0; i < total_segment_count; i++) {
               if (all_segments[i].bytes) free(all_segments[i].bytes);
@@ -983,7 +1185,8 @@ int parse_concatenated_input_with_captures(const char* input,
       } else {
         numbered_count++;
         if (numbered_count > 9) {
-          print_error("Too many numbered capture groups (max 9)", "Слишком много нумерованных групп захвата (максимум 9)");
+          print_error("Too many numbered capture groups (max 9)",
+                      "Слишком много нумерованных групп захвата (максимум 9)");
           free(group_content);
           for (int i = 0; i < total_segment_count; i++) {
             if (all_segments[i].bytes) free(all_segments[i].bytes);
@@ -997,7 +1200,8 @@ int parse_concatenated_input_with_captures(const char* input,
       PatternSegment* group_segments = NULL;
       int group_seg_count = 0;
 
-      if (!parse_concatenated_input(pattern_part, &group_segments, &group_seg_count, encoding)) {
+      if (!parse_concatenated_input(pattern_part, &group_segments,
+                                    &group_seg_count, encoding)) {
         free(group_content);
         for (int i = 0; i < total_segment_count; i++) {
           if (all_segments[i].bytes) free(all_segments[i].bytes);
@@ -1010,7 +1214,8 @@ int parse_concatenated_input_with_captures(const char* input,
       for (int i = 0; i < group_seg_count; i++) {
         if (total_segment_count >= total_segment_capacity) {
           total_segment_capacity *= 2;
-          all_segments = (PatternSegment*)realloc(all_segments, total_segment_capacity * sizeof(PatternSegment));
+          all_segments = (PatternSegment*)realloc(
+              all_segments, total_segment_capacity * sizeof(PatternSegment));
           if (!all_segments) {
             free(group_content);
             for (int j = 0; j < group_seg_count; j++) {
@@ -1081,10 +1286,55 @@ int parse_concatenated_input_with_captures(const char* input,
   return 1;
 }
 
+// Parse encoding specification: "input@output", "input@", "@output"
+int parse_encoding_spec(const char* spec, Encoding* input_enc,
+                        Encoding* output_enc) {
+  // Don't reset defaults - preserve values passed by caller
+  // Caller sets defaults (DOS-866), we only override if specified
+
+  if (!spec || strlen(spec) == 0) {
+    return 1;  // No encoding specified, use defaults
+  }
+
+  const char* at = strchr(spec, '@');
+  if (!at) {
+    // No @ found - invalid format
+    return 0;
+  }
+
+  // Parse input encoding (before @)
+  size_t input_len = at - spec;
+  if (input_len > 0) {
+    char input_str[32];
+    if (input_len >= sizeof(input_str)) return 0;
+    strncpy(input_str, spec, input_len);
+    input_str[input_len] = '\0';
+    *input_enc = parse_encoding(input_str);
+    if (*input_enc == ENCODING_UTF8 && strcmp(input_str, "utf") != 0 &&
+        strcmp(input_str, "utf8") != 0) {
+      // Unknown encoding
+      return 0;
+    }
+  }
+  // If input_len == 0 (e.g., "@win"), input_enc keeps default value
+
+  // Parse output encoding (after @)
+  const char* output_str = at + 1;
+  if (strlen(output_str) > 0) {
+    *output_enc = parse_encoding(output_str);
+    if (*output_enc == ENCODING_UTF8 && strcmp(output_str, "utf") != 0 &&
+        strcmp(output_str, "utf8") != 0) {
+      // Unknown encoding
+      return 0;
+    }
+  }
+  // If output_str is empty (e.g., "win@"), output_enc keeps default value
+
+  return 1;
+}
+
 int parse_file_spec(const char* spec, char** input_file, char** output_file,
-                    Encoding* input_enc, Encoding* output_enc, int* use_stdio) {
-  *input_enc = ENCODING_UTF8;
-  *output_enc = ENCODING_UTF8;
+                    int* use_stdio) {
   *use_stdio = 0;
   *input_file = NULL;
   *output_file = NULL;
@@ -1094,96 +1344,50 @@ int parse_file_spec(const char* spec, char** input_file, char** output_file,
     return 1;
   }
 
-  char* spec_copy = strdup(spec);
-  if (!spec_copy) return 0;
+  // Split by colon: input:output
+  const char* colon = strchr(spec, ':');
 
-  char* parts[4] = {NULL, NULL, NULL, NULL};
-  int part_count = 0;
-  char* token = spec_copy;
-  char* next;
-
-  while (token && part_count < 4) {
-    next = strchr(token, ':');
-    if (next) {
-      *next = '\0';
-      parts[part_count++] = token;
-      token = next + 1;
-    } else {
-      parts[part_count++] = token;
-      break;
-    }
-  }
-
-  int idx = 0;
-
-  // Check if first part is encoding
-  if (parts[0] &&
-      (strcmp(parts[0], "win") == 0 || strcmp(parts[0], "dos") == 0 ||
-       strcmp(parts[0], "koi") == 0 || strcmp(parts[0], "utf") == 0)) {
-    *input_enc = parse_encoding(parts[0]);
-    idx++;
-  }
-
-  // Next part must be filename or "-"
-  if (!parts[idx]) {
-    free(spec_copy);
-    return 0;
-  }
-
-  if (strcmp(parts[idx], "-") == 0) {
-    *use_stdio = 1;
-    idx++;
-
-    // Check for output encoding after "-"
-    if (parts[idx] &&
-        (strcmp(parts[idx], "win") == 0 || strcmp(parts[idx], "dos") == 0 ||
-         strcmp(parts[idx], "koi") == 0 || strcmp(parts[idx], "utf") == 0)) {
-      *output_enc = parse_encoding(parts[idx]);
-    }
-
-    free(spec_copy);
+  if (!colon) {
+    // No colon - just input file
+    *input_file = strdup(spec);
     return 1;
   }
 
-  *input_file = strdup(parts[idx]);
-  idx++;
-
-  // Check next part - could be output encoding, output filename, or "-" for
-  // stdout
-  if (parts[idx]) {
-    if (strcmp(parts[idx], "-") == 0) {
-      // Output to stdout
-      *use_stdio = 1;
-      idx++;
-
-      // Check for output encoding after "-"
-      if (parts[idx] &&
-          (strcmp(parts[idx], "win") == 0 || strcmp(parts[idx], "dos") == 0 ||
-           strcmp(parts[idx], "koi") == 0 || strcmp(parts[idx], "utf") == 0)) {
-        *output_enc = parse_encoding(parts[idx]);
-      }
-    } else if (strcmp(parts[idx], "win") == 0 ||
-               strcmp(parts[idx], "dos") == 0 ||
-               strcmp(parts[idx], "koi") == 0 ||
-               strcmp(parts[idx], "utf") == 0) {
-      *output_enc = parse_encoding(parts[idx]);
-      idx++;
-
-      // Check if there's output filename or "-" after encoding
-      if (parts[idx]) {
-        if (strcmp(parts[idx], "-") == 0) {
-          *use_stdio = 1;
-        } else {
-          *output_file = strdup(parts[idx]);
-        }
-      }
-    } else {
-      // It's output filename
-      *output_file = strdup(parts[idx]);
-    }
+  // Parse input part
+  size_t input_len = colon - spec;
+  if (input_len == 0) {
+    // Empty input - error
+    return 0;
   }
 
-  free(spec_copy);
+  if (input_len == 1 && spec[0] == '-') {
+    // Input is stdin
+    *use_stdio = 1;
+  } else {
+    // Input is file
+    *input_file = (char*)malloc(input_len + 1);
+    if (!*input_file) return 0;
+    strncpy(*input_file, spec, input_len);
+    (*input_file)[input_len] = '\0';
+  }
+
+  // Parse output part (after colon)
+  const char* output_part = colon + 1;
+  if (strlen(output_part) == 0) {
+    // Empty output - error
+    if (*input_file) free(*input_file);
+    *input_file = NULL;
+    return 0;
+  }
+
+  if (strcmp(output_part, "-") == 0) {
+    // Output to stdout
+    *use_stdio = 1;
+  } else {
+    // Output to file
+    *output_file = strdup(output_part);
+  }
+
   return 1;
 }
 
@@ -1320,13 +1524,15 @@ size_t match_pattern(unsigned char* buffer, size_t buffer_size,
               if (test_pos + next_seg->len <= buffer_size) {
                 if (ignore_case) {
                   for (size_t i = 0; i < next_seg->len; i++) {
-                    if (tolower(buffer[test_pos + i]) != tolower(next_seg->bytes[i])) {
+                    if (tolower(buffer[test_pos + i]) !=
+                        tolower(next_seg->bytes[i])) {
                       match = 0;
                       break;
                     }
                   }
                 } else {
-                  if (memcmp(buffer + test_pos, next_seg->bytes, next_seg->len) != 0) {
+                  if (memcmp(buffer + test_pos, next_seg->bytes,
+                             next_seg->len) != 0) {
                     match = 0;
                   }
                 }
@@ -1344,18 +1550,21 @@ size_t match_pattern(unsigned char* buffer, size_t buffer_size,
               if (pos + next_seg->len <= buffer_size) {
                 if (ignore_case) {
                   for (size_t i = 0; i < next_seg->len; i++) {
-                    if (tolower(buffer[pos + i]) != tolower(next_seg->bytes[i])) {
+                    if (tolower(buffer[pos + i]) !=
+                        tolower(next_seg->bytes[i])) {
                       match = 0;
                       break;
                     }
                   }
                 } else {
-                  if (memcmp(buffer + pos, next_seg->bytes, next_seg->len) != 0) {
+                  if (memcmp(buffer + pos, next_seg->bytes, next_seg->len) !=
+                      0) {
                     match = 0;
                   }
                 }
                 if (match) {
-                  // Match with zero bytes - do nothing, continue to next segment
+                  // Match with zero bytes - do nothing, continue to next
+                  // segment
                 } else {
                   return 0;  // Neither option matches
                 }
@@ -1385,7 +1594,8 @@ size_t match_pattern(unsigned char* buffer, size_t buffer_size,
             size_t search_start = pos;
             size_t found_pos = buffer_size;
 
-            for (size_t i = search_start; i <= buffer_size - next_seg->len; i++) {
+            for (size_t i = search_start; i <= buffer_size - next_seg->len;
+                 i++) {
               int match = 1;
               if (ignore_case) {
                 for (size_t j = 0; j < next_seg->len; j++) {
@@ -1510,13 +1720,15 @@ size_t match_pattern_with_captures(unsigned char* buffer, size_t buffer_size,
               if (test_pos + next_seg->len <= buffer_size) {
                 if (ignore_case) {
                   for (size_t i = 0; i < next_seg->len; i++) {
-                    if (tolower(buffer[test_pos + i]) != tolower(next_seg->bytes[i])) {
+                    if (tolower(buffer[test_pos + i]) !=
+                        tolower(next_seg->bytes[i])) {
                       match = 0;
                       break;
                     }
                   }
                 } else {
-                  if (memcmp(buffer + test_pos, next_seg->bytes, next_seg->len) != 0) {
+                  if (memcmp(buffer + test_pos, next_seg->bytes,
+                             next_seg->len) != 0) {
                     match = 0;
                   }
                 }
@@ -1531,13 +1743,15 @@ size_t match_pattern_with_captures(unsigned char* buffer, size_t buffer_size,
               if (pos + next_seg->len <= buffer_size) {
                 if (ignore_case) {
                   for (size_t i = 0; i < next_seg->len; i++) {
-                    if (tolower(buffer[pos + i]) != tolower(next_seg->bytes[i])) {
+                    if (tolower(buffer[pos + i]) !=
+                        tolower(next_seg->bytes[i])) {
                       match = 0;
                       break;
                     }
                   }
                 } else {
-                  if (memcmp(buffer + pos, next_seg->bytes, next_seg->len) != 0) {
+                  if (memcmp(buffer + pos, next_seg->bytes, next_seg->len) !=
+                      0) {
                     match = 0;
                   }
                 }
@@ -1617,10 +1831,10 @@ size_t match_pattern_with_captures(unsigned char* buffer, size_t buffer_size,
 
 // Build replacement string with capture references (\0-\9, {name})
 int build_replacement_with_captures(const char* template,
-                                    CaptureContext* captures,
-                                    Encoding encoding,
-                                    unsigned char** result,
-                                    size_t* result_len) {
+                                    CaptureContext* captures, Encoding encoding,
+                                    unsigned char** result, size_t* result_len,
+                                    CounterFormat* counter_format,
+                                    int counter_value) {
   if (!template || !captures) return 0;
 
   // First pass: calculate total size needed
@@ -1651,7 +1865,7 @@ int build_replacement_with_captures(const char* template,
       }
       p += 2;
     } else if (!in_quotes && *p == '{') {
-      // {name} - find closing }
+      // {name} or {#...} - find closing }
       const char* close = strchr(p + 1, '}');
       if (close) {
         int name_len = close - p - 1;
@@ -1660,26 +1874,30 @@ int build_replacement_with_captures(const char* template,
           strncpy(name, p + 1, name_len);
           name[name_len] = '\0';
 
-          // Find in named groups
-          int found = 0;
-          for (int i = 0; i < captures->named_group_count; i++) {
-            if (strcmp(captures->named_groups[i].name, name) == 0) {
-              int idx = captures->named_groups[i].index;
-              if (idx < captures->capture_count) {
-                total_size += captures->captures[idx].len;
+          // Check if it's a counter {#...}
+          if (name[0] == '#') {
+            // Counter - estimate max size (20 bytes should be enough for any
+            // format)
+            total_size += 20;
+          } else {
+            // Find in named groups
+            int found = 0;
+            for (int i = 0; i < captures->named_group_count; i++) {
+              if (strcmp(captures->named_groups[i].name, name) == 0) {
+                int idx = captures->named_groups[i].index;
+                if (idx < captures->capture_count) {
+                  total_size += captures->captures[idx].len;
+                }
+                found = 1;
+                break;
               }
-              found = 1;
-              break;
             }
-          }
 
-          if (!found) {
-            print_error_str(
-              "Unknown capture group in replacement",
-              "Неизвестная группа захвата в замене",
-              name
-            );
-            return 0;
+            if (!found) {
+              print_error_str("Unknown capture group in replacement",
+                              "Неизвестная группа захвата в замене", name);
+              return 0;
+            }
           }
         }
         p = close + 1;
@@ -1723,15 +1941,17 @@ int build_replacement_with_captures(const char* template,
       // \0-\9
       int num = p[1] - '0';
       if (num == 0) {
-        memcpy(*result + out_pos, captures->entire_match.data, captures->entire_match.len);
+        memcpy(*result + out_pos, captures->entire_match.data,
+               captures->entire_match.len);
         out_pos += captures->entire_match.len;
       } else if (num <= captures->capture_count) {
-        memcpy(*result + out_pos, captures->captures[num - 1].data, captures->captures[num - 1].len);
+        memcpy(*result + out_pos, captures->captures[num - 1].data,
+               captures->captures[num - 1].len);
         out_pos += captures->captures[num - 1].len;
       }
       p += 2;
     } else if (!in_quotes && *p == '{') {
-      // {name}
+      // {name} or {#...}
       const char* close = strchr(p + 1, '}');
       if (close) {
         int name_len = close - p - 1;
@@ -1740,16 +1960,32 @@ int build_replacement_with_captures(const char* template,
           strncpy(name, p + 1, name_len);
           name[name_len] = '\0';
 
-          int found = 0;
-          for (int i = 0; i < captures->named_group_count; i++) {
-            if (strcmp(captures->named_groups[i].name, name) == 0) {
-              int idx = captures->named_groups[i].index;
-              if (idx < captures->capture_count) {
-                memcpy(*result + out_pos, captures->captures[idx].data, captures->captures[idx].len);
-                out_pos += captures->captures[idx].len;
+          // Check if it's a counter {#...}
+          if (name[0] == '#') {
+            // Format counter value
+            if (counter_format) {
+              char* counter_str = format_counter(counter_value, counter_format);
+              if (counter_str) {
+                size_t counter_len = strlen(counter_str);
+                memcpy(*result + out_pos, counter_str, counter_len);
+                out_pos += counter_len;
+                free(counter_str);
               }
-              found = 1;
-              break;
+            }
+          } else {
+            // Named capture group
+            int found = 0;
+            for (int i = 0; i < captures->named_group_count; i++) {
+              if (strcmp(captures->named_groups[i].name, name) == 0) {
+                int idx = captures->named_groups[i].index;
+                if (idx < captures->capture_count) {
+                  memcpy(*result + out_pos, captures->captures[idx].data,
+                         captures->captures[idx].len);
+                  out_pos += captures->captures[idx].len;
+                }
+                found = 1;
+                break;
+              }
             }
           }
         }
@@ -1786,18 +2022,19 @@ int build_replacement_with_captures(const char* template,
     }
   }
 
-  *result_len = total_size;
+  *result_len = out_pos;  // Use actual size, not estimated total_size
   return 1;
 }
 
 // Forward declaration
 int apply_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
                      int op_count, unsigned char** result, size_t* result_size,
-                     int* total_replacements);
+                     int* total_replacements, Encoding input_enc);
 
 // Preview operations without modifying data (dry-run mode)
-int preview_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
-                       int op_count, int* total_matches) {
+int preview_operations(unsigned char* buffer, size_t buffer_size,
+                       Operation* ops, int op_count, int* total_matches,
+                       Encoding input_enc) {
   *total_matches = 0;
 
   // Work with a copy to simulate sequential operations
@@ -1853,7 +2090,8 @@ int preview_operations(unsigned char* buffer, size_t buffer_size, Operation* ops
       fprintf(stderr, COLOR_GREEN "\"");
       if (op->replace_template) {
         // Show template with capture references
-        for (const char* p = op->replace_template; *p && (p - op->replace_template) < 30; p++) {
+        for (const char* p = op->replace_template;
+             *p && (p - op->replace_template) < 30; p++) {
           if (*p == '"' || *p == '\'') continue;  // Skip quotes
           fputc(*p, stderr);
         }
@@ -1907,7 +2145,8 @@ int preview_operations(unsigned char* buffer, size_t buffer_size, Operation* ops
               }
             }
           } else {
-            match = (memcmp(current + i, op->search_bytes, op->search_len) == 0);
+            match =
+                (memcmp(current + i, op->search_bytes, op->search_len) == 0);
           }
           if (match) match_len = op->search_len;
         }
@@ -1918,8 +2157,9 @@ int preview_operations(unsigned char* buffer, size_t buffer_size, Operation* ops
           captures.named_groups[ng] = op->defined_groups[ng];
         }
         captures.named_group_count = op->defined_group_count;
-        match_len = match_pattern_with_captures(current, current_size, op->segments,
-                                                op->segment_count, i, &captures, op->ignore_case);
+        match_len = match_pattern_with_captures(current, current_size,
+                                                op->segments, op->segment_count,
+                                                i, &captures, op->ignore_case);
       }
 
       if (match_len > 0) {
@@ -1951,7 +2191,8 @@ int preview_operations(unsigned char* buffer, size_t buffer_size, Operation* ops
       int line_num = match_list[m].line_num;
 
       size_t line_start = line_starts[line_num - 1];
-      size_t line_end = (line_num < line_count) ? line_starts[line_num] - 1 : current_size;
+      size_t line_end =
+          (line_num < line_count) ? line_starts[line_num] - 1 : current_size;
       if (line_end > 0 && current[line_end - 1] == '\n') line_end--;
 
       fprintf(stderr, "  Line %d: \"", line_num);
@@ -1981,7 +2222,8 @@ int preview_operations(unsigned char* buffer, size_t buffer_size, Operation* ops
       fprintf(stderr, "\"\n");
     }
 
-    fprintf(stderr, "  " COLOR_GREEN "Matches found: %d" COLOR_RESET "\n\n", matches);
+    fprintf(stderr, "  " COLOR_GREEN "Matches found: %d" COLOR_RESET "\n\n",
+            matches);
     *total_matches += matches;
 
     free(match_list);
@@ -1993,7 +2235,8 @@ int preview_operations(unsigned char* buffer, size_t buffer_size, Operation* ops
       size_t temp_size = 0;
       int temp_replacements = 0;
 
-      if (!apply_operations(current, current_size, op, 1, &temp_result, &temp_size, &temp_replacements)) {
+      if (!apply_operations(current, current_size, op, 1, &temp_result,
+                            &temp_size, &temp_replacements, input_enc)) {
         free(current);
         return 0;
       }
@@ -2010,13 +2253,16 @@ int preview_operations(unsigned char* buffer, size_t buffer_size, Operation* ops
 
 int apply_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
                      int op_count, unsigned char** result, size_t* result_size,
-                     int* total_replacements) {
+                     int* total_replacements, Encoding input_enc) {
   unsigned char* current = buffer;
   size_t current_size = buffer_size;
   *total_replacements = 0;
 
   for (int op_idx = 0; op_idx < op_count; op_idx++) {
     Operation* op = &ops[op_idx];
+
+    // Initialize counter for this operation
+    int counter_value = op->has_counter ? op->counter_format.start : 0;
 
     unsigned char* temp = (unsigned char*)malloc(current_size * 2 + 1024);
     if (!temp) {
@@ -2044,21 +2290,25 @@ int apply_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
             }
           } else {
             // Case-sensitive comparison
-            match = (memcmp(current + i, op->search_bytes, op->search_len) == 0);
+            match =
+                (memcmp(current + i, op->search_bytes, op->search_len) == 0);
           }
 
           if (match) {
             if (!op->delete_mode) {
-              if (op->has_captures_in_replace) {
-                // Build replacement with \0 substitution
+              if (op->has_captures_in_replace || op->has_counter) {
+                // Build replacement with \0 substitution or counter
                 CaptureContext captures = {0};
                 captures.entire_match.data = current + i;
                 captures.entire_match.len = op->search_len;
 
                 unsigned char* replacement = NULL;
                 size_t replacement_len = 0;
-                if (build_replacement_with_captures(op->replace_template, &captures,
-                                                    ENCODING_UTF8, &replacement, &replacement_len)) {
+                if (build_replacement_with_captures(
+                        op->replace_template, &captures, input_enc,
+                        &replacement, &replacement_len,
+                        op->has_counter ? &op->counter_format : NULL,
+                        counter_value)) {
                   memcpy(temp + temp_pos, replacement, replacement_len);
                   temp_pos += replacement_len;
                   free(replacement);
@@ -2071,6 +2321,18 @@ int apply_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
             }
             i += op->search_len;
             replacements++;
+
+            // Increment counter and check end limit
+            if (op->has_counter) {
+              counter_value++;
+              if (op->counter_format.end > 0 &&
+                  counter_value > op->counter_format.end) {
+                // Reached end limit, copy rest of buffer and stop
+                memcpy(temp + temp_pos, current + i, current_size - i);
+                temp_pos += current_size - i;
+                break;
+              }
+            }
           } else {
             temp[temp_pos++] = current[i++];
           }
@@ -2088,20 +2350,24 @@ int apply_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
         }
         captures.named_group_count = op->defined_group_count;
 
-        size_t match_len = match_pattern_with_captures(current, current_size, op->segments,
-                                         op->segment_count, i, &captures, op->ignore_case);
+        size_t match_len = match_pattern_with_captures(
+            current, current_size, op->segments, op->segment_count, i,
+            &captures, op->ignore_case);
         if (match_len > 0) {
           // Update entire_match length
           captures.entire_match.len = match_len;
 
           // Replace matched bytes
           if (!op->delete_mode) {
-            if (op->has_captures_in_replace) {
-              // Build replacement with captures
+            if (op->has_captures_in_replace || op->has_counter) {
+              // Build replacement with captures or counter
               unsigned char* replacement = NULL;
               size_t replacement_len = 0;
-              if (build_replacement_with_captures(op->replace_template, &captures,
-                                                  ENCODING_UTF8, &replacement, &replacement_len)) {
+              if (build_replacement_with_captures(
+                      op->replace_template, &captures, ENCODING_UTF8,
+                      &replacement, &replacement_len,
+                      op->has_counter ? &op->counter_format : NULL,
+                      counter_value)) {
                 memcpy(temp + temp_pos, replacement, replacement_len);
                 temp_pos += replacement_len;
                 free(replacement);
@@ -2114,6 +2380,18 @@ int apply_operations(unsigned char* buffer, size_t buffer_size, Operation* ops,
           }
           i += match_len;
           replacements++;
+
+          // Increment counter and check end limit
+          if (op->has_counter) {
+            counter_value++;
+            if (op->counter_format.end > 0 &&
+                counter_value > op->counter_format.end) {
+              // Reached end limit, copy rest of buffer and stop
+              memcpy(temp + temp_pos, current + i, current_size - i);
+              temp_pos += current_size - i;
+              break;
+            }
+          }
         } else {
           temp[temp_pos++] = current[i++];
         }
@@ -2165,6 +2443,7 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
 
   char* replace_start = (char*)(colon + 1);
   const char* second_colon = NULL;
+  const char* encoding_marker = NULL;  // Can be ':' or '@'
   in_quotes = 0;
   brace_depth = 0;
   for (const char* p = replace_start; *p; p++) {
@@ -2174,8 +2453,9 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
     if (!in_quotes) {
       if (*p == '{') brace_depth++;
       if (*p == '}') brace_depth--;
-      if (*p == ':' && brace_depth == 0) {
+      if ((*p == ':' || *p == '@') && brace_depth == 0 && !second_colon) {
         second_colon = p;
+        encoding_marker = p;
         break;
       }
     }
@@ -2198,7 +2478,8 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
 
     // Check for /i flag at the end
     size_t enc_len = strlen(encoding_str);
-    if (enc_len >= 2 && encoding_str[enc_len - 2] == '/' && encoding_str[enc_len - 1] == 'i') {
+    if (enc_len >= 2 && encoding_str[enc_len - 2] == '/' &&
+        encoding_str[enc_len - 1] == 'i') {
       ignore_case = 1;
       // Remove /i from encoding string
       char* enc_copy = strdup(encoding_str);
@@ -2223,7 +2504,8 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
 
     // Check for /i flag at the end of replace_str
     size_t rep_len = strlen(replace_str);
-    if (rep_len >= 2 && replace_str[rep_len - 2] == '/' && replace_str[rep_len - 1] == 'i') {
+    if (rep_len >= 2 && replace_str[rep_len - 2] == '/' &&
+        replace_str[rep_len - 1] == 'i') {
       ignore_case = 1;
       replace_str[rep_len - 2] = '\0';  // Remove /i
 
@@ -2254,7 +2536,8 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
       const char* close = strchr(p + 1, '}');
       if (close) {
         int content_len = close - p - 1;
-        // Check if content has = or wildcards (definition) vs just name (reference)
+        // Check if content has = or wildcards (definition) vs just name
+        // (reference)
         int has_equals = 0;
         int has_wildcard_inside = 0;
         for (const char* c = p + 1; c < close; c++) {
@@ -2283,8 +2566,9 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
   if (has_capture_groups) {
     // Use capture groups parsing
     op->pattern_type = PATTERN_WILDCARD;
-    if (!parse_concatenated_input_with_captures(search_str, &op->segments, &op->segment_count,
-                                  encoding, op->defined_groups, &op->defined_group_count)) {
+    if (!parse_concatenated_input_with_captures(
+            search_str, &op->segments, &op->segment_count, encoding,
+            op->defined_groups, &op->defined_group_count)) {
       free(search_str);
       free(replace_str);
       return 0;
@@ -2317,8 +2601,8 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
       }
     }
 
-    if (!parse_text_with_wildcards(text_to_parse, &op->segments, &op->segment_count,
-                                   encoding)) {
+    if (!parse_text_with_wildcards(text_to_parse, &op->segments,
+                                   &op->segment_count, encoding)) {
       if (text_to_parse != search_str) free(text_to_parse);
       free(search_str);
       free(replace_str);
@@ -2439,10 +2723,60 @@ int parse_operation(const char* arg, Operation* op, Encoding encoding) {
   // Check if replace string contains capture references (\0, \1, etc.)
   op->has_captures_in_replace = has_capture_references(replace_str);
   if (op->has_captures_in_replace) {
-    // Save template without processing quotes - they'll be handled in build_replacement_with_captures
+    // Save template without processing quotes - they'll be handled in
+    // build_replacement_with_captures
     op->replace_template = strdup(replace_str);
   } else {
     op->replace_template = NULL;
+  }
+
+  // Check if replace string contains counter {#...}
+  op->has_counter = 0;
+  in_quotes = 0;
+  for (const char* p = replace_str; *p; p++) {
+    if (*p == '"' || *p == '\'') {
+      in_quotes = !in_quotes;
+    }
+    // {#...} works only outside quotes, like {name} capture references
+    if (!in_quotes && *p == '{' && p[1] == '#') {
+      // Found counter syntax
+      const char* close = strchr(p + 2, '}');
+      if (close) {
+        // Parse counter format
+        const char* params_start = p + 2;
+        int params_len = 0;
+
+        // Check if there's a colon after #
+        if (*params_start == ':') {
+          params_start++;
+          params_len = close - params_start;
+        }
+
+        if (parse_counter_format(params_start, params_len,
+                                 &op->counter_format)) {
+          op->has_counter = 1;
+          // Also need to save template for counter substitution
+          if (!op->replace_template) {
+            op->replace_template = strdup(replace_str);
+          }
+        } else {
+          fprintf(stderr,
+                  "Error: Invalid counter format in replacement string\n");
+          fprintf(stderr, "Ошибка: Неверный формат счётчика в строке замены\n");
+          if (op->search_bytes) free(op->search_bytes);
+          if (op->segments) {
+            for (int i = 0; i < op->segment_count; i++) {
+              if (op->segments[i].bytes) free(op->segments[i].bytes);
+            }
+            free(op->segments);
+          }
+          free(search_str);
+          free(replace_str);
+          return 0;
+        }
+        break;
+      }
+    }
   }
 
   // Set ignore_case flag
@@ -2501,18 +2835,27 @@ int main(int argc, char* argv[]) {
     fprintf(stderr, "  argc = %d\n", argc);
     for (int i = 0; i < argc; i++) {
       fprintf(stderr, "  argv[%d] = '%s'\n", i, argv[i]);
+      // Show hex bytes for arguments with Cyrillic
+      if (i >= 3) {
+        fprintf(stderr, "           hex: ");
+        for (const char* p = argv[i]; *p; p++) {
+          fprintf(stderr, "%02X ", (unsigned char)*p);
+        }
+        fprintf(stderr, "\n");
+      }
     }
     fprintf(stderr, "\n");
   }
 
   if (dry_run_mode) {
     fprintf(stderr, COLOR_CYAN "=== TEST MODE (Preview) ===" COLOR_RESET "\n");
-    fprintf(stderr, COLOR_YELLOW "No changes will be made to files" COLOR_RESET "\n\n");
+    fprintf(stderr,
+            COLOR_YELLOW "No changes will be made to files" COLOR_RESET "\n\n");
   }
 
   if (argc < 2 + arg_offset) {
     fprintf(stderr,
-            "\n" COLOR_YELLOW "REPLACER " COLOR_YELLOW "v26.0424 - " COLOR_CYAN
+            "\n" COLOR_YELLOW "REPLACER " COLOR_YELLOW "v26.0426 - " COLOR_CYAN
             "File content search and replace utility with encoding "
             "conversion" COLOR_RESET "\n");
     fprintf(stderr,
@@ -2520,9 +2863,10 @@ int main(int argc, char* argv[]) {
             "конвертацией кодировок\n");
     fprintf(stderr, "(By BoyNG - \nVyacheslav Burnosov)\n\n\n");
     fprintf(stderr,
-            COLOR_YELLOW "Usage / Использование:" COLOR_RESET " %s " COLOR_GREEN
-                         "[-d] [-t] [encoding:]<input>[:[encoding][:output]]" COLOR_RESET
-                         " [operations...]\n\n",
+            COLOR_YELLOW
+            "Usage / Использование:" COLOR_RESET " %s " COLOR_GREEN
+            "[-d] [-t] <file_spec> [encoding_spec] [operations...]" COLOR_RESET
+            "\n\n",
             argv[0]);
 
     fprintf(stderr,
@@ -2541,62 +2885,62 @@ int main(int argc, char* argv[]) {
             "выходного\n");
     fprintf(stderr, "  " COLOR_GREEN "file.bin:-" COLOR_RESET
                     "                  - " COLOR_CYAN
-                    "output to stdout (like 'type' command)" COLOR_RESET "\n");
-    fprintf(stderr,
-            "                                вывод в stdout (как команда "
-            "'type')\n");
-    fprintf(stderr, "  " COLOR_GREEN "file.txt:utf" COLOR_RESET
-                    "                - " COLOR_CYAN
-                    "convert file to UTF-8 encoding" COLOR_RESET "\n");
-    fprintf(stderr,
-            "                                конвертировать файл в кодировку "
-            "UTF-8\n");
-    fprintf(stderr, "  " COLOR_GREEN "file.txt:-:utf" COLOR_RESET
-                    "              - " COLOR_CYAN
-                    "output to stdout with UTF-8 conversion" COLOR_RESET "\n");
-    fprintf(stderr,
-            "                                вывод в stdout с конвертацией в "
-            "UTF-8\n");
-    fprintf(stderr, "  " COLOR_GREEN "win:file.txt" COLOR_RESET
-                    "                - " COLOR_CYAN
-                    "read file as Windows-1251" COLOR_RESET "\n");
-    fprintf(stderr,
-            "                                читать файл как Windows-1251\n");
-    fprintf(stderr, "  " COLOR_GREEN "win:file.txt:utf" COLOR_RESET
-                    "            - " COLOR_CYAN
-                    "convert Windows-1251 to UTF-8" COLOR_RESET "\n");
-    fprintf(stderr,
-            "                                конвертировать Windows-1251 в "
-            "UTF-8\n");
-    fprintf(stderr, "  " COLOR_GREEN "win:file.txt:-" COLOR_RESET
-                    "              - " COLOR_CYAN
-                    "output Windows-1251 file to stdout" COLOR_RESET "\n");
-    fprintf(
-        stderr,
-        "                                вывод файла Windows-1251 в stdout\n");
-    fprintf(stderr, "  " COLOR_GREEN "win:file.txt:-:utf" COLOR_RESET
-                    "          - " COLOR_CYAN
-                    "convert and output to stdout" COLOR_RESET "\n");
-    fprintf(stderr,
-            "                                конвертация и вывод в stdout\n");
-    fprintf(stderr, "  " COLOR_GREEN "win:file.txt:utf:out.txt" COLOR_RESET
-                    "    - " COLOR_CYAN
-                    "convert with custom output name" COLOR_RESET "\n");
-    fprintf(stderr,
-            "                                конвертация с указанием имени "
-            "выхода\n");
+                    "output to stdout" COLOR_RESET "\n");
+    fprintf(stderr, "                                вывод в stdout\n");
     fprintf(stderr, "  " COLOR_GREEN "-" COLOR_RESET
                     "                           - " COLOR_CYAN
                     "read from stdin, write to stdout" COLOR_RESET "\n");
     fprintf(
         stderr,
         "                                читать из stdin, писать в stdout\n");
-    fprintf(stderr, "  " COLOR_GREEN "win:-:utf" COLOR_RESET
-                    "                   - " COLOR_CYAN
-                    "stdin/stdout with encoding conversion" COLOR_RESET "\n");
+    fprintf(stderr, "  " COLOR_GREEN "-:-" COLOR_RESET
+                    "                         - " COLOR_CYAN
+                    "stdin to stdout (explicit)" COLOR_RESET "\n");
+    fprintf(stderr, "                                stdin в stdout (явно)\n");
     fprintf(stderr,
-            "                                stdin/stdout с конвертацией "
-            "кодировки\n");
+            "  " COLOR_GREEN "-:output.txt" COLOR_RESET
+            "                - " COLOR_CYAN "stdin to file" COLOR_RESET "\n");
+    fprintf(stderr, "                                stdin в файл\n");
+    fprintf(stderr, "\n");
+
+    fprintf(stderr, COLOR_YELLOW
+            "Encoding specification / Формат кодировки:" COLOR_RESET "\n");
+    fprintf(stderr, "  " COLOR_GREEN "\"input@output\"" COLOR_RESET
+                    "              - " COLOR_CYAN
+                    "both input and output encodings" COLOR_RESET "\n");
+    fprintf(stderr,
+            "                                кодировки входа и выхода\n");
+    fprintf(stderr, "  " COLOR_GREEN "\"input@\"" COLOR_RESET
+                    "                    - " COLOR_CYAN
+                    "only input encoding (output=DOS-866)" COLOR_RESET "\n");
+    fprintf(stderr,
+            "                                только входная кодировка "
+            "(выход=DOS-866)\n");
+    fprintf(stderr, "  " COLOR_GREEN "\"@output\"" COLOR_RESET
+                    "                   - " COLOR_CYAN
+                    "only output encoding (input=DOS-866)" COLOR_RESET "\n");
+    fprintf(stderr,
+            "                                только выходная кодировка "
+            "(вход=DOS-866)\n");
+    fprintf(stderr,
+            "  " COLOR_CYAN "Encodings / Кодировки:" COLOR_RESET
+            " win (Windows-1251), dos (DOS-866), koi (KOI8-R), utf (UTF-8)\n");
+    fprintf(stderr, "  " COLOR_CYAN "Default / По умолчанию:" COLOR_RESET
+                    " dos (DOS-866)\n");
+    fprintf(stderr, "\n");
+    fprintf(stderr, "  " COLOR_YELLOW "Examples / Примеры:" COLOR_RESET "\n");
+    fprintf(stderr, "    %s file.txt \"win@utf\" operations...\n", argv[0]);
+    fprintf(stderr, "      " COLOR_CYAN
+                    "Read as WIN-1251, write as UTF-8" COLOR_RESET "\n");
+    fprintf(stderr, "      " COLOR_CYAN
+                    "Читать как WIN-1251, писать как UTF-8" COLOR_RESET "\n");
+    fprintf(stderr, "    %s -:- \"@utf\" operations...\n", argv[0]);
+    fprintf(stderr, "      " COLOR_CYAN
+                    "stdin(DOS-866) to stdout(UTF-8)" COLOR_RESET "\n");
+    fprintf(stderr, "    %s file.txt:out.txt \"win@\" operations...\n",
+            argv[0]);
+    fprintf(stderr, "      " COLOR_CYAN
+                    "Read as WIN-1251, write as DOS-866" COLOR_RESET "\n");
     fprintf(stderr, "\n");
     getchar();
     fprintf(stderr, "\n" COLOR_YELLOW
@@ -2622,26 +2966,9 @@ int main(int argc, char* argv[]) {
     fprintf(stderr,
             "  Hex: " COLOR_GREEN "0xFFAA" COLOR_RESET " or " COLOR_GREEN
             "$FFAA" COLOR_RESET " / или " COLOR_GREEN "$FFAA" COLOR_RESET "\n");
-    fprintf(stderr, "  Text: " COLOR_GREEN "\"hello\"" COLOR_RESET
+    fprintf(stderr, "  Text: " COLOR_GREEN "'hello'" COLOR_RESET
                     " or plain text / Текст: " COLOR_GREEN
-                    "\"привет\"" COLOR_RESET " или просто текст\n");
-
-    fprintf(stderr, "\n" COLOR_YELLOW "Encodings / Кодировки:" COLOR_RESET
-                    " " COLOR_GREEN "win" COLOR_RESET " (CP1251), " COLOR_GREEN
-                    "dos" COLOR_RESET " (CP866), " COLOR_GREEN "koi" COLOR_RESET
-                    " (KOI8-R), " COLOR_GREEN "utf" COLOR_RESET
-                    " (UTF-8, default/по умолчанию)\n");
-
-    fprintf(stderr, "\n" COLOR_YELLOW "Debug mode / Режим отладки:" COLOR_RESET "\n");
-    fprintf(stderr, "  " COLOR_GREEN "-d" COLOR_RESET
-                    "                          - " COLOR_CYAN
-                    "show detailed debug information" COLOR_RESET "\n");
-    fprintf(stderr,
-            "                                показать подробную отладочную информацию\n");
-    fprintf(stderr, "  " COLOR_CYAN "Note:" COLOR_RESET
-                    " Must be first argument. Shows arguments, file spec, operations, sizes.\n");
-    fprintf(stderr, "  " COLOR_CYAN "Примечание:" COLOR_RESET
-                    " Должен быть первым аргументом. Показывает аргументы, файлы, операции, размеры.\n");
+                    "'привет'" COLOR_RESET " или просто текст\n");
 
     fprintf(stderr, "\n" COLOR_YELLOW
                     "Wildcards / Подстановочные символы:" COLOR_RESET "\n");
@@ -2662,113 +2989,180 @@ int main(int argc, char* argv[]) {
     fprintf(stderr, "  " COLOR_CYAN "Примечание:" COLOR_RESET
                     " Используйте обратный слэш для wildcards. Без слэша - "
                     "литеральные символы.\n");
+    getchar();
 
     fprintf(stderr,
             "\n" COLOR_YELLOW "Concatenation / Конкатенация:" COLOR_RESET "\n");
     fprintf(stderr, "  " COLOR_GREEN "+" COLOR_RESET
                     "                           - " COLOR_CYAN
                     "join operator" COLOR_RESET " / оператор объединения\n");
-    fprintf(stderr, "  " COLOR_GREEN "\"text\"+0x0A+\"more\"" COLOR_RESET
+    fprintf(stderr, "  " COLOR_GREEN "'text'+0x0A+'more'" COLOR_RESET
                     "          - " COLOR_CYAN
                     "join text, hex, and text" COLOR_RESET "\n");
     fprintf(stderr,
             "                                объединить текст, hex и текст\n");
-    fprintf(stderr, "  " COLOR_GREEN "\"<tag>\"+\\*+\"</tag>\"" COLOR_RESET
+    fprintf(stderr, "  " COLOR_GREEN "'<tag>'+\\*+'</tag>'" COLOR_RESET
                     "         - " COLOR_CYAN
                     "match anything between tags" COLOR_RESET "\n");
     fprintf(stderr,
             "                                найти что угодно между тегами\n");
-    fprintf(stderr, "  " COLOR_GREEN "\"colo\"+\\?+\"r\"" COLOR_RESET
+    fprintf(stderr, "  " COLOR_GREEN "'colo'+\\?+'r'" COLOR_RESET
                     "               - " COLOR_CYAN
                     "match color, colour, colo?r" COLOR_RESET "\n");
     fprintf(stderr,
             "                                найти color, colour, colo?r\n");
 
-    fprintf(stderr, "\n" COLOR_YELLOW "Capture groups / Группы захвата:" COLOR_RESET "\n");
+    fprintf(stderr, "\n" COLOR_YELLOW
+                    "Capture groups / Группы захвата:" COLOR_RESET "\n");
     fprintf(stderr, "  " COLOR_GREEN "{pattern}" COLOR_RESET
                     "                   - " COLOR_CYAN
                     "numbered capture group (max 9)" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                нумерованная группа захвата (максимум 9)\n");
+            "                                нумерованная группа захвата "
+            "(максимум 9)\n");
     fprintf(stderr, "  " COLOR_GREEN "{name=pattern}" COLOR_RESET
                     "              - " COLOR_CYAN
                     "named capture group (unlimited)" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                именованная группа захвата (неограниченно)\n");
+            "                                именованная группа захвата "
+            "(неограниченно)\n");
     fprintf(stderr, "  " COLOR_GREEN "\\0" COLOR_RESET
                     "                          - " COLOR_CYAN
                     "reference entire match in replacement" COLOR_RESET "\n");
+    fprintf(
+        stderr,
+        "                                ссылка на всё вхождение в замене\n");
     fprintf(stderr,
-            "                                ссылка на всё вхождение в замене\n");
-    fprintf(stderr, "  " COLOR_GREEN "\\1" COLOR_RESET " to " COLOR_GREEN "\\9" COLOR_RESET
-                    "                     - " COLOR_CYAN
-                    "reference numbered groups in replacement" COLOR_RESET "\n");
+            "  " COLOR_GREEN "\\1" COLOR_RESET " to " COLOR_GREEN
+            "\\9" COLOR_RESET "                    - " COLOR_CYAN
+            "reference numbered groups in replacement" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                ссылка на нумерованные группы в замене\n");
+            "                                ссылка на нумерованные группы в "
+            "замене\n");
     fprintf(stderr, "  " COLOR_GREEN "{name}" COLOR_RESET
                     "                      - " COLOR_CYAN
                     "reference named group in replacement" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                ссылка на именованную группу в замене\n");
+            "                                ссылка на именованную группу в "
+            "замене\n");
+    getchar();
 
     fprintf(stderr, "\n" COLOR_YELLOW "Flags / Флаги:" COLOR_RESET "\n");
+    fprintf(stderr,
+            "  " COLOR_GREEN "-d" COLOR_RESET
+            "                          - " COLOR_CYAN
+            "debug mode (show detailed processing info)" COLOR_RESET "\n");
+    fprintf(stderr,
+            "                                режим отладки (показать детальную "
+            "информацию)\n");
+    fprintf(stderr,
+            "  " COLOR_GREEN "-t, --test" COLOR_RESET
+            "                  - " COLOR_CYAN
+            "test mode (show changes without modifying)" COLOR_RESET "\n");
+    fprintf(stderr,
+            "                                тестовый режим (показать "
+            "изменения без модификации)\n");
+    fprintf(stderr,
+            "  " COLOR_GREEN "/i" COLOR_RESET
+            "                          - " COLOR_CYAN
+            "case-insensitive search (add at end of operation)" COLOR_RESET
+            "\n");
+    fprintf(stderr,
+            "                                поиск без учёта регистра "
+            "(добавить в конец операции)\n");
+    fprintf(stderr, "  " COLOR_GREEN "'hello':'HELLO'/i" COLOR_RESET
+                    "           - " COLOR_CYAN
+                    "match hello, Hello, HELLO, etc." COLOR_RESET "\n");
+    fprintf(
+        stderr,
+        "                                найти hello, Hello, HELLO и т.д.\n");
+    getchar();
+
+    fprintf(stderr,
+            "\n" COLOR_YELLOW "Debug mode / Режим отладки:" COLOR_RESET "\n");
     fprintf(stderr, "  " COLOR_GREEN "-d" COLOR_RESET
                     "                          - " COLOR_CYAN
-                    "debug mode (show detailed processing info)" COLOR_RESET "\n");
+                    "show detailed debug information" COLOR_RESET "\n");
     fprintf(stderr,
-            "                                режим отладки (показать детальную информацию)\n");
-    fprintf(stderr, "  " COLOR_GREEN "-t, --test" COLOR_RESET
-                    "                    - " COLOR_CYAN
-                    "test mode (show changes without modifying)" COLOR_RESET "\n");
-    fprintf(stderr,
-            "                                тестовый режим (показать изменения без модификации)\n");
-    fprintf(stderr, "  " COLOR_GREEN "/i" COLOR_RESET
-                    "                          - " COLOR_CYAN
-                    "case-insensitive search (add at end of operation)" COLOR_RESET "\n");
-    fprintf(stderr,
-            "                                поиск без учёта регистра (добавить в конец операции)\n");
-    fprintf(stderr, "  " COLOR_GREEN "'hello':'HELLO'/i" COLOR_RESET
-                    "         - " COLOR_CYAN
-                    "match hello, Hello, HELLO, etc." COLOR_RESET "\n");
-    fprintf(stderr,
-            "                                найти hello, Hello, HELLO и т.д.\n");
+            "                                показать подробную отладочную "
+            "информацию\n");
+    fprintf(stderr, "  " COLOR_CYAN "Note:" COLOR_RESET
+                    " Must be first argument. Shows arguments, file spec, "
+                    "operations, sizes.\n");
+    fprintf(stderr, "  " COLOR_CYAN "Примечание:" COLOR_RESET
+                    " Должен быть первым аргументом. Показывает аргументы, "
+                    "файлы, операции, размеры.\n");
 
     fprintf(stderr, "\n" COLOR_YELLOW "Examples / Примеры:" COLOR_RESET "\n");
     fprintf(stderr, "  %s file.bin 0xAA:0xBB 0xCC:0xDD\n", argv[0]);
-    fprintf(stderr, "  %s file.bin:out.bin 0xAA:0xBB \"old\":\"new\":win\n",
+    fprintf(stderr, "  %s file.bin:out.bin 0xAA:0xBB \"'old':'new'\"\n",
             argv[0]);
     fprintf(stderr, "  %s file.txt:-\n", argv[0]);
     fprintf(stderr, "  %s file.txt:- 0xAA:0xBB\n", argv[0]);
-    fprintf(stderr, "  %s win:file.txt:-:utf\n", argv[0]);
-    fprintf(stderr, "  %s win:file.txt:utf\n", argv[0]);
-    fprintf(stderr, "  %s win:file.txt:utf \"тест\":\"test\"\n", argv[0]);
-    fprintf(stderr, "  %s file.txt \"тест\":\"test\":win \"hello\":\n",
+    fprintf(stderr, "  %s file.txt \"win@utf\" \"'тест':'test'\"\n", argv[0]);
+    fprintf(stderr, "  %s file.txt:output.txt \"win@dos\" \"'old':'new'\"\n",
             argv[0]);
+    fprintf(stderr, "  %s -:- \"@utf\" \"'hello':'HELLO'\"\n", argv[0]);
     fprintf(stderr, "  %s - 0xAA:0xBB < in.bin > out.bin\n", argv[0]);
     fprintf(stderr, "  type in.bin | %s - 0xAA:0xBB > out.bin\n", argv[0]);
-    fprintf(stderr, "  type file.txt | %s - \"old\":\"new\"\n", argv[0]);
-    fprintf(stderr, "  %s - \"old\":\"new\" < file.txt\n", argv[0]);
-    fprintf(stderr, "  %s - \"old\":\"new\" < file.txt 2>nul\n", argv[0]);
-    fprintf(stderr, "  %s win:-:utf < input.txt > output.txt\n", argv[0]);
+    fprintf(stderr, "  type file.txt | %s -:- \"'old':'new'\"\n", argv[0]);
+    fprintf(stderr, "  %s -:- \"'old':'new'\" < file.txt\n", argv[0]);
+    fprintf(stderr,
+            "  %s -:- \"win@utf\" \"'old':'new'\" < input.txt > output.txt\n",
+            argv[0]);
     fprintf(
         stderr,
-        "  %s test.html \"<title>\"+\\*+\"</title>\":\"<title>New</title>\"\n",
+        "  %s test.html \"'<title>'+\\*+'</title>':'<title>New</title>'\"\n",
         argv[0]);
-    fprintf(stderr, "  %s test.txt \"colo\"+\\?+\"r\":\"COLOR\"\n", argv[0]);
+    fprintf(stderr, "  %s test.txt \"'colo'+\\?+'r':'COLOR'\"\n", argv[0]);
     fprintf(stderr, "  %s test.bin 0xAA+\\.+0xBB:0xFF\n", argv[0]);
-    fprintf(stderr, "\n" COLOR_YELLOW "Capture group examples / Примеры групп захвата:" COLOR_RESET "\n");
+    fprintf(stderr,
+            "\n" COLOR_YELLOW
+            "Capture group examples / Примеры групп захвата:" COLOR_RESET "\n");
     fprintf(stderr, "  %s file.txt \"'error':'[\\0]'\"\n", argv[0]);
-    fprintf(stderr, "    " COLOR_CYAN "Wrap 'error' in brackets: error -> [error]" COLOR_RESET "\n");
-    fprintf(stderr, "    " COLOR_CYAN "Обернуть 'error' в скобки: error -> [error]" COLOR_RESET "\n");
-    fprintf(stderr, "  %s file.txt \"'['+{*}+'] '+{*}:'\\2 (\\1)'\"\n", argv[0]);
-    fprintf(stderr, "    " COLOR_CYAN "Swap parts: [ERROR] File not found -> File not found (ERROR)" COLOR_RESET "\n");
-    fprintf(stderr, "    " COLOR_CYAN "Поменять части местами: [ERROR] File not found -> File not found (ERROR)" COLOR_RESET "\n");
-    fprintf(stderr, "  %s file.txt \"'Name: '+{name=*}+', Age: '+{age=*}:'{age}+' years, name='+{name}'\"\n", argv[0]);
-    fprintf(stderr, "    " COLOR_CYAN "Named groups: Name: John, Age: 30 -> 30 years, name=John" COLOR_RESET "\n");
-    fprintf(stderr, "    " COLOR_CYAN "Именованные группы: Name: John, Age: 30 -> 30 years, name=John" COLOR_RESET "\n");
+    fprintf(stderr,
+            "    " COLOR_CYAN
+            "Wrap 'error' in brackets: error -> [error]" COLOR_RESET "\n");
+    fprintf(stderr,
+            "    " COLOR_CYAN
+            "Обернуть 'error' в скобки: error -> [error]" COLOR_RESET "\n");
+    fprintf(stderr, "  %s file.txt \"'['+{*}+'] '+{*}:'\\2 (\\1)'\"\n",
+            argv[0]);
+    fprintf(stderr, "    " COLOR_CYAN
+                    "Swap parts: [ERROR] File not found -> File not found "
+                    "(ERROR)" COLOR_RESET "\n");
+    fprintf(stderr, "    " COLOR_CYAN
+                    "Поменять части местами: [ERROR] File not found -> File "
+                    "not found (ERROR)" COLOR_RESET "\n");
+    fprintf(stderr,
+            "  %s file.txt \"'Name: '+{name=*}+', Age: '+{age=*}:'{age}+' "
+            "years, name='+{name}'\"\n",
+            argv[0]);
+    fprintf(
+        stderr,
+        "    " COLOR_CYAN
+        "Named groups: Name: John, Age: 30 -> 30 years, name=John" COLOR_RESET
+        "\n");
+    fprintf(stderr, "    " COLOR_CYAN
+                    "Именованные группы: Name: John, Age: 30 -> 30 years, "
+                    "name=John" COLOR_RESET "\n");
     fprintf(stderr, "  %s file.txt \"'hello':'HELLO'/i\"\n", argv[0]);
-    fprintf(stderr, "    " COLOR_CYAN "Case-insensitive: hello, Hello, HELLO -> HELLO" COLOR_RESET "\n");
-    fprintf(stderr, "    " COLOR_CYAN "Без учёта регистра: hello, Hello, HELLO -> HELLO" COLOR_RESET "\n");
+    fprintf(stderr,
+            "    " COLOR_CYAN
+            "Case-insensitive: hello, Hello, HELLO -> HELLO" COLOR_RESET "\n");
+    fprintf(stderr,
+            "    " COLOR_CYAN
+            "Без учёта регистра: hello, Hello, HELLO -> HELLO" COLOR_RESET
+            "\n");
+    fprintf(stderr, "  %s -:- \"'TODO':'Task '+{#:A}\"\n", argv[0]);
+    fprintf(stderr,
+            "    " COLOR_CYAN
+            "Counter: TODO, TODO, TODO -> Task A, Task B, Task C" COLOR_RESET
+            "\n");
+    fprintf(stderr,
+            "    " COLOR_CYAN
+            "Счётчик: TODO, TODO, TODO -> Task A, Task B, Task C" COLOR_RESET
+            "\n");
     getchar();
     return 1;
   }
@@ -2777,30 +3171,52 @@ int main(int argc, char* argv[]) {
 
   char* input_file = NULL;
   char* output_file = NULL;
-  Encoding input_enc = ENCODING_UTF8;
-  Encoding output_enc = ENCODING_UTF8;
+  Encoding input_enc = ENCODING_DOS866;
+  Encoding output_enc = ENCODING_DOS866;
   int use_stdio = 0;
 
-  if (!parse_file_spec(file_spec, &input_file, &output_file, &input_enc,
-                       &output_enc, &use_stdio)) {
+  if (!parse_file_spec(file_spec, &input_file, &output_file, &use_stdio)) {
     fprintf(stderr, "Error: Invalid file specification\n");
     return 1;
   }
 
+  // Check if next argument is encoding specification (contains @ and no :)
+  int encoding_arg_offset = 0;
+  if (argc > 2 + arg_offset) {
+    const char* next_arg = argv[2 + arg_offset];
+    if (strchr(next_arg, '@') && !strchr(next_arg, ':')) {
+      // This is encoding specification
+      if (!parse_encoding_spec(next_arg, &input_enc, &output_enc)) {
+        fprintf(stderr, "Error: Invalid encoding specification '%s'\n",
+                next_arg);
+        fprintf(stderr, "Format: input@output, input@, or @output\n");
+        fprintf(stderr, "Encodings: win, dos, koi, utf\n");
+        if (input_file) free(input_file);
+        if (output_file) free(output_file);
+        return 1;
+      }
+      encoding_arg_offset = 1;
+    }
+  }
+
   if (debug_mode) {
     fprintf(stderr, COLOR_YELLOW "File specification:" COLOR_RESET "\n");
-    fprintf(stderr, "  Input file:     %s\n", input_file ? input_file : "(stdin)");
-    fprintf(stderr, "  Output file:    %s\n", output_file ? output_file : "(stdout)");
+    fprintf(stderr, "  Input file:     %s\n",
+            input_file ? input_file : "(stdin)");
+    fprintf(stderr, "  Output file:    %s\n",
+            output_file ? output_file : "(stdout)");
     fprintf(stderr, "  Input encoding: %s\n",
-            input_enc == ENCODING_UTF8 ? "UTF-8" :
-            input_enc == ENCODING_WIN1251 ? "WIN-1251" :
-            input_enc == ENCODING_DOS866 ? "DOS-866" :
-            input_enc == ENCODING_KOI8R ? "KOI8-R" : "Unknown");
+            input_enc == ENCODING_UTF8      ? "UTF-8"
+            : input_enc == ENCODING_WIN1251 ? "WIN-1251"
+            : input_enc == ENCODING_DOS866  ? "DOS-866"
+            : input_enc == ENCODING_KOI8R   ? "KOI8-R"
+                                            : "Unknown");
     fprintf(stderr, "  Output encoding: %s\n",
-            output_enc == ENCODING_UTF8 ? "UTF-8" :
-            output_enc == ENCODING_WIN1251 ? "WIN-1251" :
-            output_enc == ENCODING_DOS866 ? "DOS-866" :
-            output_enc == ENCODING_KOI8R ? "KOI8-R" : "Unknown");
+            output_enc == ENCODING_UTF8      ? "UTF-8"
+            : output_enc == ENCODING_WIN1251 ? "WIN-1251"
+            : output_enc == ENCODING_DOS866  ? "DOS-866"
+            : output_enc == ENCODING_KOI8R   ? "KOI8-R"
+                                             : "Unknown");
     fprintf(stderr, "  Use stdio:      %s\n\n", use_stdio ? "yes" : "no");
   }
 
@@ -2812,11 +3228,14 @@ int main(int argc, char* argv[]) {
       return 1;
     }
     if (debug_mode) {
-      fprintf(stderr, COLOR_YELLOW "Auto-generated output filename:" COLOR_RESET " %s\n\n", output_file);
+      fprintf(stderr,
+              COLOR_YELLOW "Auto-generated output filename:" COLOR_RESET
+                           " %s\n\n",
+              output_file);
     }
   }
 
-  int op_count = argc - 2 - arg_offset;
+  int op_count = argc - 2 - arg_offset - encoding_arg_offset;
   Operation* operations = NULL;
 
   if (op_count > 0) {
@@ -2829,7 +3248,8 @@ int main(int argc, char* argv[]) {
     }
 
     for (int i = 0; i < op_count; i++) {
-      if (!parse_operation(argv[i + 2 + arg_offset], &operations[i], ENCODING_UTF8)) {
+      if (!parse_operation(argv[i + 2 + arg_offset + encoding_arg_offset],
+                           &operations[i], ENCODING_DOS866)) {
         for (int j = 0; j < i; j++) {
           free_operation(&operations[j]);
         }
@@ -2840,8 +3260,78 @@ int main(int argc, char* argv[]) {
       }
     }
 
+    // Convert operations from DOS-866 (command line encoding) to input_enc (working encoding)
+    // This ensures operations match the file data encoding
+    if (input_enc != ENCODING_DOS866) {
+      for (int i = 0; i < op_count; i++) {
+        if (operations[i].pattern_type == PATTERN_LITERAL) {
+          // Convert search bytes
+          unsigned char* converted_search = NULL;
+          size_t converted_search_len = 0;
+          if (apply_encoding_conversion(operations[i].search_bytes,
+                                        operations[i].search_len,
+                                        ENCODING_DOS866, input_enc,
+                                        &converted_search, &converted_search_len)) {
+            free(operations[i].search_bytes);
+            operations[i].search_bytes = converted_search;
+            operations[i].search_len = converted_search_len;
+          }
+
+          // Convert replace bytes (if not delete mode and no captures)
+          if (!operations[i].delete_mode && !operations[i].has_captures_in_replace) {
+            unsigned char* converted_replace = NULL;
+            size_t converted_replace_len = 0;
+            if (apply_encoding_conversion(operations[i].replace_bytes,
+                                          operations[i].replace_len,
+                                          ENCODING_DOS866, input_enc,
+                                          &converted_replace, &converted_replace_len)) {
+              free(operations[i].replace_bytes);
+              operations[i].replace_bytes = converted_replace;
+              operations[i].replace_len = converted_replace_len;
+            }
+          }
+        } else if (operations[i].pattern_type == PATTERN_WILDCARD) {
+          // Convert wildcard segments (literal parts only)
+          for (int j = 0; j < operations[i].segment_count; j++) {
+            if (!operations[i].segments[j].is_wildcard &&
+                operations[i].segments[j].bytes != NULL &&
+                operations[i].segments[j].len > 0) {
+              // Convert this literal segment
+              unsigned char* converted = NULL;
+              size_t converted_len = 0;
+              if (apply_encoding_conversion(
+                    operations[i].segments[j].bytes,
+                    operations[i].segments[j].len,
+                    ENCODING_DOS866, input_enc,
+                    &converted, &converted_len)) {
+                free(operations[i].segments[j].bytes);
+                operations[i].segments[j].bytes = converted;
+                operations[i].segments[j].len = converted_len;
+              }
+            }
+          }
+
+          // Convert replace bytes for wildcard patterns (if not delete mode and no captures)
+          if (!operations[i].delete_mode && !operations[i].has_captures_in_replace &&
+              operations[i].replace_bytes != NULL && operations[i].replace_len > 0) {
+            unsigned char* converted_replace = NULL;
+            size_t converted_replace_len = 0;
+            if (apply_encoding_conversion(operations[i].replace_bytes,
+                                          operations[i].replace_len,
+                                          ENCODING_DOS866, input_enc,
+                                          &converted_replace, &converted_replace_len)) {
+              free(operations[i].replace_bytes);
+              operations[i].replace_bytes = converted_replace;
+              operations[i].replace_len = converted_replace_len;
+            }
+          }
+        }
+      }
+    }
+
     if (debug_mode) {
-      fprintf(stderr, COLOR_YELLOW "Operations (%d):" COLOR_RESET "\n", op_count);
+      fprintf(stderr, COLOR_YELLOW "Operations (%d):" COLOR_RESET "\n",
+              op_count);
       for (int i = 0; i < op_count; i++) {
         fprintf(stderr, "  [%d] ", i + 1);
         if (operations[i].pattern_type == PATTERN_LITERAL) {
@@ -2853,9 +3343,11 @@ int main(int argc, char* argv[]) {
         } else {
           fprintf(stderr, "WILDCARD: %d segments", operations[i].segment_count);
           if (operations[i].defined_group_count > 0) {
-            fprintf(stderr, ", %d named groups (", operations[i].defined_group_count);
+            fprintf(stderr, ", %d named groups (",
+                    operations[i].defined_group_count);
             for (int g = 0; g < operations[i].defined_group_count; g++) {
-              fprintf(stderr, "%s%s", g > 0 ? ", " : "", operations[i].defined_groups[g].name);
+              fprintf(stderr, "%s%s", g > 0 ? ", " : "",
+                      operations[i].defined_groups[g].name);
             }
             fprintf(stderr, ")");
           }
@@ -2866,7 +3358,8 @@ int main(int argc, char* argv[]) {
         } else if (operations[i].has_captures_in_replace) {
           fprintf(stderr, "REPLACE with captures");
           if (operations[i].replace_template) {
-            fprintf(stderr, "\n      Template: '%s'", operations[i].replace_template);
+            fprintf(stderr, "\n      Template: '%s'",
+                    operations[i].replace_template);
           }
         } else {
           fprintf(stderr, "REPLACE: ");
@@ -2884,8 +3377,9 @@ int main(int argc, char* argv[]) {
         if (operations[i].defined_group_count > 0) {
           fprintf(stderr, "      Defined groups:\n");
           for (int g = 0; g < operations[i].defined_group_count; g++) {
-            fprintf(stderr, "        [%d] '%s' -> capture index %d\n",
-                    g, operations[i].defined_groups[g].name, operations[i].defined_groups[g].index);
+            fprintf(stderr, "        [%d] '%s' -> capture index %d\n", g,
+                    operations[i].defined_groups[g].name,
+                    operations[i].defined_groups[g].index);
           }
         }
       }
@@ -2977,7 +3471,9 @@ int main(int argc, char* argv[]) {
     }
 
     if (debug_mode) {
-      fprintf(stderr, COLOR_YELLOW "Input file size:" COLOR_RESET " %zu bytes\n\n", buffer_size);
+      fprintf(stderr,
+              COLOR_YELLOW "Input file size:" COLOR_RESET " %zu bytes\n\n",
+              buffer_size);
     }
 
     // Set stdout to binary mode if outputting to stdout
@@ -2989,25 +3485,8 @@ int main(int argc, char* argv[]) {
   unsigned char* processed = NULL;
   size_t processed_size = 0;
 
-  // Apply input encoding conversion if needed
-  if (input_enc != ENCODING_UTF8) {
-    if (!apply_encoding_conversion(buffer, buffer_size, input_enc,
-                                   ENCODING_UTF8, &processed,
-                                   &processed_size)) {
-      fprintf(stderr, "Error: Failed to convert input encoding\n");
-      free(buffer);
-      if (operations) {
-        for (int i = 0; i < op_count; i++) free_operation(&operations[i]);
-        free(operations);
-      }
-      if (input_file) free(input_file);
-      if (output_file) free(output_file);
-      return 1;
-    }
-    free(buffer);
-    buffer = processed;
-    buffer_size = processed_size;
-  }
+  // No encoding conversion - work directly in source encoding
+  // (Operations are already parsed in DOS-866, file is in DOS-866)
 
   // Apply operations if any
   unsigned char* result = NULL;
@@ -3018,7 +3497,8 @@ int main(int argc, char* argv[]) {
     if (dry_run_mode) {
       // Dry-run mode: preview changes without modifying
       int total_matches = 0;
-      if (!preview_operations(buffer, buffer_size, operations, op_count, &total_matches)) {
+      if (!preview_operations(buffer, buffer_size, operations, op_count,
+                              &total_matches, input_enc)) {
         fprintf(stderr, "Error: Failed to preview operations\n");
         free(buffer);
         for (int i = 0; i < op_count; i++) free_operation(&operations[i]);
@@ -3029,8 +3509,10 @@ int main(int argc, char* argv[]) {
       }
 
       fprintf(stderr, COLOR_CYAN "=== PREVIEW SUMMARY ===" COLOR_RESET "\n");
-      fprintf(stderr, COLOR_YELLOW "Total matches: %d" COLOR_RESET "\n", total_matches);
-      fprintf(stderr, COLOR_GREEN "No changes were made (test mode)" COLOR_RESET "\n");
+      fprintf(stderr, COLOR_YELLOW "Total matches: %d" COLOR_RESET "\n",
+              total_matches);
+      fprintf(stderr,
+              COLOR_GREEN "No changes were made (test mode)" COLOR_RESET "\n");
 
       free(buffer);
       for (int i = 0; i < op_count; i++) free_operation(&operations[i]);
@@ -3041,7 +3523,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (!apply_operations(buffer, buffer_size, operations, op_count, &result,
-                          &result_size, &total_replacements)) {
+                          &result_size, &total_replacements, input_enc)) {
       fprintf(stderr, "Error: Failed to apply operations\n");
       free(buffer);
       for (int i = 0; i < op_count; i++) free_operation(&operations[i]);
@@ -3057,7 +3539,8 @@ int main(int argc, char* argv[]) {
       fprintf(stderr, "  Total replacements: %d\n", total_replacements);
       fprintf(stderr, "  Input size:         %zu bytes\n", buffer_size);
       fprintf(stderr, "  Output size:        %zu bytes\n", result_size);
-      fprintf(stderr, "  Size change:        %+zd bytes\n\n" COLOR_RED, (ssize_t)result_size - (ssize_t)buffer_size);
+      fprintf(stderr, "  Size change:        %+zd bytes\n\n" COLOR_RED,
+              (ssize_t)result_size - (ssize_t)buffer_size);
     }
   } else {
     result = buffer;
@@ -3068,8 +3551,8 @@ int main(int argc, char* argv[]) {
   unsigned char* final_result = NULL;
   size_t final_size = 0;
 
-  if (output_enc != ENCODING_UTF8) {
-    if (!apply_encoding_conversion(result, result_size, ENCODING_UTF8,
+  if (input_enc != output_enc) {
+    if (!apply_encoding_conversion(result, result_size, input_enc,
                                    output_enc, &final_result, &final_size)) {
       fprintf(stderr, "Error: Failed to convert output encoding\n");
       free(result);
@@ -3084,21 +3567,29 @@ int main(int argc, char* argv[]) {
     free(result);
     result = final_result;
     result_size = final_size;
+  } else {
+    final_result = result;
+    final_size = result_size;
   }
 
-  if (use_stdio) {
+  if (use_stdio && !output_file) {
+    // Write to stdout only if no output file specified
     fwrite(result, 1, result_size, stdout);
   } else {
-    FILE* fout = fopen(output_file, "wb");
+    // Write to file (either output_file or generated name)
+    const char* out_filename =
+        output_file ? output_file : create_output_filename(input_file);
+    FILE* fout = fopen(out_filename, "wb");
     if (!fout) {
-      fprintf(stderr, "Error: Cannot create output file '%s'\n", output_file);
+      fprintf(stderr, "Error: Cannot create output file '%s'\n", out_filename);
+      if (!output_file) free((char*)out_filename);
       free(result);
       if (operations) {
         for (int i = 0; i < op_count; i++) free_operation(&operations[i]);
         free(operations);
       }
-      free(input_file);
-      free(output_file);
+      if (input_file) free(input_file);
+      if (output_file) free(output_file);
       return 1;
     }
 
@@ -3108,7 +3599,9 @@ int main(int argc, char* argv[]) {
     if (op_count > 0) {
       fprintf(stderr, "Total replacements: %d\n", total_replacements);
     }
-    fprintf(stderr, "Output file: %s\n", output_file);
+    fprintf(stderr, "Output file: %s\n", out_filename);
+
+    if (!output_file) free((char*)out_filename);
   }
 
   free(result);
@@ -3120,7 +3613,8 @@ int main(int argc, char* argv[]) {
   if (output_file) free(output_file);
 
   if (debug_mode) {
-    fprintf(stderr, COLOR_GREEN "\n=== DEBUG MODE COMPLETE ===" COLOR_RESET "\n");
+    fprintf(stderr,
+            COLOR_GREEN "\n=== DEBUG MODE COMPLETE ===" COLOR_RESET "\n");
   }
 
   return 0;
